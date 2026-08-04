@@ -28,3 +28,12 @@ type Position struct {
 	TakeProfitPrice float64 `json:"take_profit_price"`
 	StopLossPrice   float64 `json:"stop_loss_price"`
 }
+
+type Logging struct {
+	Symbol        string    `json:"symbol"`
+	OpenPosition  time.Time `json:"position_open"`
+	ClosePosition time.Time `json:"position_close"`
+	Entry         float64   `json:"entry"`
+	Exit          float64   `json:"exit"`
+	PnL           float64   `json:"pnl"`
+}

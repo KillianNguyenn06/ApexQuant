@@ -5,7 +5,10 @@ import (
 
 	"apexquant/internal/account"
 	"apexquant/internal/algorithm"
+	"apexquant/internal/broker"
 	"apexquant/internal/marketdata"
+	"apexquant/internal/risk"
+	"apexquant/internal/simulation"
 )
 
 // SymbolState stores the current state of the selected symbol
@@ -25,4 +28,18 @@ type TradingSession struct {
 	Order           []account.Order         `json:"orders"`
 	Running         bool                    `json:"running"`
 	StartedAt       time.Time               `json:"started_at"`
+}
+
+// Current flow for a signal
+func Session(signal algorithm.Signal, input simulation.MonteCarlo, position account.Position, result simulation.MonteCarloResult, acc account.Account) {
+	switch signal.Action {
+	case "Buy":
+		simulation.GBMModel(input, position, &result)
+		quantity := risk.EvaluateRisk(result, position, acc)
+		broker.SubmitOrder(signal, quantity)
+	case "Sell":
+		broker.SubmitOrder(signal, position.Quantity)
+	default:
+		return
+	}
 }

@@ -11,3 +11,6 @@ func main() {
 	// fmt.Printf("GBM Monte Carlo Result: %v\n", GBMResult)
 
 }
+
+// Aug 4th, pretty finish main pipeline
+// Might need mock data + display to see how it goes

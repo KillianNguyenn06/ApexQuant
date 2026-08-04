@@ -8,13 +8,13 @@ import (
 	"apexquant/internal/marketdata"
 )
 
-type TradeAction string
+// type TradeAction string
 
-const (
-	Hold TradeAction = "HOLD"
-	Buy  TradeAction = "BUY"
-	Sell TradeAction = "SELL"
-)
+// const (
+// 	Hold TradeAction = "HOLD"
+// 	Buy  TradeAction = "BUY"
+// 	Sell TradeAction = "SELL"
+// )
 
 type Indicator struct {
 	VWAP              float64 `json:"vwap"`
@@ -30,11 +30,11 @@ type VWAPState struct {
 }
 
 type Signal struct {
-	Symbol         string    `json:"symbol"`
-	Action         string    `json:"action"` // "buy" or "sell" or "hold"
-	Price          float64   `json:"price"`
-	VWAP           float64   `json:"vwap"`
-	ZScore         float64   `json:"z_score"`
+	Symbol string  `json:"symbol"`
+	Action string  `json:"action"` // "buy" or "sell" or "hold"
+	Price  float64 `json:"price"`
+	VWAP   float64 `json:"vwap"`
+	//ZScore         float64   `json:"z_score"`
 	WinProbability float64   `json:"win_probability"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -80,7 +80,7 @@ func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *
 	return indicator.StandardDeviation, indicator.UpperBand, indicator.LowerBand
 }
 
-func DecisionMaking(indicator *Indicator, VWAPState *VWAPState, position *account.Position, action TradeAction) TradeAction {
+func DecisionMaking(indicator *Indicator, position *account.Position) Signal {
 
 	// Buy shares
 	if position.Quantity == 0 && position.CurrentPrice <= indicator.LowerBand {
@@ -89,21 +89,36 @@ func DecisionMaking(indicator *Indicator, VWAPState *VWAPState, position *accoun
 		position.TakeProfitPrice = indicator.VWAP + indicator.StandardDeviation
 		position.StopLossPrice = indicator.LowerBand - indicator.StandardDeviation
 
-		return Buy
+		return Signal{
+			Symbol:    position.Symbol,
+			Action:    "Buy",
+			Price:     position.EntryPrice,
+			VWAP:      indicator.VWAP,
+			CreatedAt: time.Now(),
+		}
 	}
 
 	if position.Quantity > 0 && position.CurrentPrice <= position.StopLossPrice {
 		// Hit Stop Loss
-		return Sell
+		return Signal{
+			Symbol:    position.Symbol,
+			Action:    "Sell",
+			Price:     position.CurrentPrice,
+			VWAP:      indicator.VWAP,
+			CreatedAt: time.Now(),
+		}
 	}
 
 	if position.Quantity > 0 && position.CurrentPrice >= position.TakeProfitPrice {
 		// Hit TP
-		return Sell
+		return Signal{
+			Symbol:    position.Symbol,
+			Action:    "Sell",
+			Price:     position.CurrentPrice,
+			VWAP:      indicator.VWAP,
+			CreatedAt: time.Now(),
+		}
 	}
 
-	return Hold
+	return Signal{Action: "Hold"}
 }
-
-// So far setup DecisionMaking, Kelly Risk, Quantity
-// Might need to check Monte Carlo in Simulation again b4 move forward (Need to return Expected Return?)
