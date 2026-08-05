@@ -7,27 +7,28 @@ import (
 	"time"
 
 	"apexquant/internal/account"
+	"apexquant/internal/algorithm"
 )
 
 type MonteCarlo struct {
 	UnderlyingPrice float64 `json:"underlying_price"` // S0
-	TargetPrice     float64 `json:"target_price"`     // K
-	StopLossPrice   float64 `json:"stop_loss_price"`
-	Volatility      float64 `json:"volatility"`     // sigma
-	RiskFreeRate    float64 `json:"risk_free_rate"` // r
-	TimeHorizon     float64 `json:"time_horizon"`   // T
-	NumPaths        int     `json:"num_paths"`      // N e.g: 10000
-	NumSteps        int     `json:"num_steps"`      // 252 for Standard, 100 for shorter interval
+	//TargetPrice     float64 `json:"target_price"`     // K
+	//StopLossPrice   float64 `json:"stop_loss_price"`
+	Volatility   float64 `json:"volatility"`     // sigma
+	RiskFreeRate float64 `json:"risk_free_rate"` // r
+	TimeHorizon  float64 `json:"time_horizon"`   // T
+	NumPaths     int     `json:"num_paths"`      // N e.g: 10000
+	NumSteps     int     `json:"num_steps"`      // 252 for Standard, 100 for shorter interval
 }
 
 type MonteCarloResult struct {
-	WinProbability     float64 `json:"win_probability"`
-	LossProbability    float64 `json:"loss_probability"`
-	ExpectedReturn     float64 `json:"expected_return"`
+	WinProbability  float64 `json:"win_probability"`
+	LossProbability float64 `json:"loss_probability"`
+	//ExpectedReturn     float64 `json:"expected_return"`
 	TimeoutProbability float64 `json:"timeout_probability"`
 }
 
-func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloResult) (float64, float64, float64) {
+func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloResult, signal algorithm.Signal) (float64, float64, float64) {
 
 	wins := 0.0
 	losses := 0.0
@@ -44,7 +45,7 @@ func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloRes
 		go func(pathIndex int) {
 			defer wg.Done()
 			outcome := "timeout"
-			st := input.UnderlyingPrice
+			st := signal.Price
 			localRand := rand.New(rand.NewSource(time.Now().UnixNano() + int64(pathIndex))) // Create a new random source for each goroutine
 			for j := 0; j < input.NumSteps; j++ {
 				z := localRand.NormFloat64()           // Generate a random number from a standard normal distribution

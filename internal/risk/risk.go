@@ -31,7 +31,7 @@ func DollarRisk(position account.Account, kellyFraction float64) float64 {
 	return position.Equity * kellyFraction
 }
 
-func Quantity(riskPerShare float64, dollarRisk float64) float64 {
+func QuantityByRisk(riskPerShare float64, dollarRisk float64) float64 {
 	if riskPerShare == 0 {
 		return 0
 	}
@@ -39,10 +39,20 @@ func Quantity(riskPerShare float64, dollarRisk float64) float64 {
 }
 
 func EvaluateRisk(result simulation.MonteCarloResult, position account.Position, acc account.Account) float64 {
-	kellyFraction := KellyCriterion(result, position)
+	fractionMultiplier := 0.5 // Personal Choice of Risk Management
+	kellyFraction := fractionMultiplier * KellyCriterion(result, position)
 	riskPerShare := RiskPerShare(position)
 	dollarRisk := DollarRisk(acc, kellyFraction)
-	quantity := Quantity(riskPerShare, dollarRisk)
+	quantityByRisk := QuantityByRisk(riskPerShare, dollarRisk)
+
+	affordableQuantity := acc.BuyingPower / position.EntryPrice
+	quantity := min(quantityByRisk, affordableQuantity)
 
 	return quantity
 }
+
+// func pause() {
+// 	fmt.Print("\n\tPress Enter to continue...")
+// 	fmt.Scanln()
+// 	fmt.Print("\033[H\033[2J")
+// }

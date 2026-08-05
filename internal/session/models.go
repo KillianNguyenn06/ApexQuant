@@ -31,15 +31,34 @@ type TradingSession struct {
 }
 
 // Current flow for a signal
-func Session(signal algorithm.Signal, input simulation.MonteCarlo, position account.Position, result simulation.MonteCarloResult, acc account.Account) {
+func Session(signal algorithm.Signal, input simulation.MonteCarlo, position *account.Position, result simulation.MonteCarloResult, acc *account.Account, order *account.Order, nextBar marketdata.BarTick) (account.Order, bool) {
+
 	switch signal.Action {
 	case "Buy":
-		simulation.GBMModel(input, position, &result)
-		quantity := risk.EvaluateRisk(result, position, acc)
-		broker.SubmitOrder(signal, quantity)
+		simulation.GBMModel(input, *position, &result, signal)
+		order.Quantity = risk.EvaluateRisk(result, *position, *acc)
+		if order.Quantity <= 0 {
+			return account.Order{}, false
+		} else {
+			order := broker.SubmitOrder(signal, order.Quantity) // Capture order and return order + a successful signal
+			order = broker.FillOrderAtNextBar(order, nextBar)
+			position.Quantity += order.Quantity
+			acc.BuyingPower -= order.Quantity * position.EntryPrice
+			acc.Cash -= order.Quantity * position.EntryPrice
+			acc.Equity = acc.Cash + order.Quantity*position.EntryPrice
+			return order, true
+		}
 	case "Sell":
-		broker.SubmitOrder(signal, position.Quantity)
+
+		order := broker.SubmitOrder(signal, position.Quantity)
+		order = broker.FillOrderAtNextBar(order, nextBar)
+		position.Quantity -= order.Quantity
+		acc.BuyingPower += order.Quantity * position.CurrentPrice
+		acc.Cash += order.Quantity * position.EntryPrice
+		acc.Equity = acc.Cash - order.Quantity*position.EntryPrice
+		return order, true
+
 	default:
-		return
+		return account.Order{}, false
 	}
 }

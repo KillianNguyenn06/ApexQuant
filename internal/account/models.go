@@ -37,3 +37,5 @@ type Logging struct {
 	Exit          float64   `json:"exit"`
 	PnL           float64   `json:"pnl"`
 }
+
+
