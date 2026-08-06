@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"time"
 
 	"apexquant/internal/account"
@@ -38,14 +39,15 @@ func Session(signal algorithm.Signal, input simulation.MonteCarlo, position *acc
 		simulation.GBMModel(input, *position, &result, signal)
 		order.Quantity = risk.EvaluateRisk(result, *position, *acc)
 		if order.Quantity <= 0 {
+			fmt.Printf("\n\tOrder Quantity Less than or Equal to 0: %v\n", order.Quantity)
 			return account.Order{}, false
 		} else {
 			order := broker.SubmitOrder(signal, order.Quantity) // Capture order and return order + a successful signal
 			order = broker.FillOrderAtNextBar(order, nextBar)
 			position.Quantity += order.Quantity
-			acc.BuyingPower -= order.Quantity * position.EntryPrice
-			acc.Cash -= order.Quantity * position.EntryPrice
-			acc.Equity = acc.Cash + order.Quantity*position.EntryPrice
+			acc.BuyingPower -= order.Quantity * order.FilledPrice
+			acc.Cash -= order.Quantity * order.FilledPrice
+			acc.Equity = acc.Cash + order.Quantity*order.FilledPrice
 			return order, true
 		}
 	case "Sell":
@@ -53,9 +55,9 @@ func Session(signal algorithm.Signal, input simulation.MonteCarlo, position *acc
 		order := broker.SubmitOrder(signal, position.Quantity)
 		order = broker.FillOrderAtNextBar(order, nextBar)
 		position.Quantity -= order.Quantity
-		acc.BuyingPower += order.Quantity * position.CurrentPrice
-		acc.Cash += order.Quantity * position.EntryPrice
-		acc.Equity = acc.Cash - order.Quantity*position.EntryPrice
+		acc.BuyingPower += order.Quantity * order.FilledPrice
+		acc.Cash += order.Quantity * order.FilledPrice
+		acc.Equity = acc.Cash + position.CurrentPrice*position.Quantity
 		return order, true
 
 	default:

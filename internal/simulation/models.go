@@ -11,7 +11,7 @@ import (
 )
 
 type MonteCarlo struct {
-	UnderlyingPrice float64 `json:"underlying_price"` // S0
+	//UnderlyingPrice float64 `json:"underlying_price"` // S0
 	//TargetPrice     float64 `json:"target_price"`     // K
 	//StopLossPrice   float64 `json:"stop_loss_price"`
 	Volatility   float64 `json:"volatility"`     // sigma
