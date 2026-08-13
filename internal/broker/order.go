@@ -4,7 +4,6 @@ import (
 	"apexquant/internal/account"
 	"apexquant/internal/algorithm"
 	"apexquant/internal/marketdata"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -19,7 +18,7 @@ func SubmitOrder(signal algorithm.Signal, quantity float64) account.Order {
 			Action:    signal.Action,
 			Quantity:  quantity,
 			Status:    "Submitted",
-			CreatedAt: time.Now(),
+			CreatedAt: signal.CreatedAt,
 		}
 	case "Sell":
 		return account.Order{
@@ -28,7 +27,7 @@ func SubmitOrder(signal algorithm.Signal, quantity float64) account.Order {
 			Action:    signal.Action,
 			Quantity:  quantity,
 			Status:    "Submitted",
-			CreatedAt: time.Now(),
+			CreatedAt: signal.CreatedAt,
 		}
 	case "Hold":
 		return account.Order{}

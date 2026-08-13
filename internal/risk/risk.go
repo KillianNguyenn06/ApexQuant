@@ -10,7 +10,7 @@ import (
 // Put kelly, position sizing, risk
 func KellyCriterion(result simulation.MonteCarloResult, position account.Position) float64 {
 
-	if position.StopLossPrice > position.EntryPrice {
+	if position.StopLossPrice >= position.EntryPrice {
 		fmt.Printf("\n\tError: SL above Entry Price.")
 		return 0
 	}
@@ -45,15 +45,21 @@ func QuantityByRisk(riskPerShare float64, dollarRisk float64) float64 {
 	return dollarRisk / riskPerShare
 }
 
-func EvaluateRisk(result simulation.MonteCarloResult, position account.Position, acc account.Account) float64 {
+func EvaluateRisk(result simulation.MonteCarloResult, position account.Position, acc account.Account, allocationWeight float64) float64 {
 	fractionMultiplier := 0.2 // Personal Choice of Risk Management
 	kellyFraction := fractionMultiplier * KellyCriterion(result, position)
 	riskPerShare := RiskPerShare(position)
 	dollarRisk := DollarRisk(acc, kellyFraction)
 	quantityByRisk := QuantityByRisk(riskPerShare, dollarRisk)
 
-	affordableQuantity := acc.BuyingPower / position.EntryPrice
-	quantity := min(quantityByRisk, affordableQuantity)
+	symbolAllocation := acc.Equity * allocationWeight         // How much that batch of symbol weight in Equity
+	symbolValue := position.CurrentPrice * position.Quantity  // How much that batch's value is worth right now
+	symbolBudget := math.Max(0, symbolAllocation-symbolValue) // How much that batch allowed to grab from Account
+	symbolAffordableQuantity := symbolBudget / position.EntryPrice
+
+	availableFunds := min(acc.Cash, acc.BuyingPower)
+	affordableQuantity := availableFunds / position.EntryPrice
+	quantity := min(quantityByRisk, affordableQuantity, symbolAffordableQuantity)
 
 	return quantity
 }

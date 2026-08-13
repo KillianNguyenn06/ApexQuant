@@ -44,14 +44,14 @@ type Signal struct {
 // For every incoming price tick/candle
 // =================================================
 func TypicalPrice(bar marketdata.BarTick) float64 {
-	return (bar.High + bar.Low + bar.Close) / 3
+	return (bar.High + bar.Low + bar.Close) / 3 // Since we fetch bar.VWAP, we dont need this. Leave it as a fallback
 }
 
 // =================================================
 // VWAP Calculation
 // =================================================
 func VWAP(bar marketdata.BarTick, vwapState *VWAPState, indicator *Indicator) float64 {
-	vwapState.TotalPriceVolume += TypicalPrice(bar) * bar.Volume
+	vwapState.TotalPriceVolume += bar.VWAP * bar.Volume
 	vwapState.TotalVolume += bar.Volume
 	if vwapState.TotalVolume == 0 {
 		return 0
@@ -65,9 +65,10 @@ func VWAP(bar marketdata.BarTick, vwapState *VWAPState, indicator *Indicator) fl
 // =================================================
 func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *Indicator) (float64, float64, float64) {
 
-	k := 1.0                                                                         // band multiplier (commonly 1,2 or 3)
-	VWAPState.TotalSquaredPriceVolume += math.Pow(TypicalPrice(bar), 2) * bar.Volume // Basically the numerator
+	k := 1.0                                                                // band multiplier (commonly 1,2 or 3)
+	VWAPState.TotalSquaredPriceVolume += math.Pow(bar.VWAP, 2) * bar.Volume // Basically the numerator
 	variance := VWAPState.TotalSquaredPriceVolume/VWAPState.TotalVolume - math.Pow(indicator.VWAP, 2)
+	variance = math.Max(0, variance)
 	indicator.StandardDeviation = math.Sqrt(variance)
 
 	indicator.UpperBand = indicator.VWAP + (k * indicator.StandardDeviation)
@@ -76,21 +77,21 @@ func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *
 	return indicator.StandardDeviation, indicator.UpperBand, indicator.LowerBand
 }
 
-func DecisionMaking(indicator *Indicator, position *account.Position) Signal {
+func DecisionMaking(indicator *Indicator, position *account.Position, bar marketdata.BarTick) Signal {
 
 	// Buy shares
 	if position.Quantity == 0 && position.CurrentPrice <= indicator.LowerBand {
 
 		position.EntryPrice = position.CurrentPrice
 		position.TakeProfitPrice = indicator.VWAP + 0.5*indicator.StandardDeviation
-		position.StopLossPrice = indicator.LowerBand - indicator.StandardDeviation
+		position.StopLossPrice = position.EntryPrice - indicator.StandardDeviation
 
 		return Signal{
 			Symbol:    position.Symbol,
 			Action:    "Buy",
 			Price:     position.EntryPrice,
 			VWAP:      indicator.VWAP,
-			CreatedAt: time.Now(),
+			CreatedAt: bar.Timestamp,
 		}
 	}
 
@@ -101,7 +102,7 @@ func DecisionMaking(indicator *Indicator, position *account.Position) Signal {
 			Action:    "Sell",
 			Price:     position.CurrentPrice,
 			VWAP:      indicator.VWAP,
-			CreatedAt: time.Now(),
+			CreatedAt: bar.Timestamp,
 		}
 	}
 
@@ -112,7 +113,7 @@ func DecisionMaking(indicator *Indicator, position *account.Position) Signal {
 			Action:    "Sell",
 			Price:     position.CurrentPrice,
 			VWAP:      indicator.VWAP,
-			CreatedAt: time.Now(),
+			CreatedAt: bar.Timestamp,
 		}
 	}
 

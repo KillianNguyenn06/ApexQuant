@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -8,12 +9,10 @@ import (
 
 	"apexquant/internal/account"
 	"apexquant/internal/algorithm"
+	"apexquant/internal/marketdata"
 )
 
 type MonteCarlo struct {
-	//UnderlyingPrice float64 `json:"underlying_price"` // S0
-	//TargetPrice     float64 `json:"target_price"`     // K
-	//StopLossPrice   float64 `json:"stop_loss_price"`
 	Volatility   float64 `json:"volatility"`     // sigma
 	RiskFreeRate float64 `json:"risk_free_rate"` // r
 	TimeHorizon  float64 `json:"time_horizon"`   // T
@@ -76,4 +75,34 @@ func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloRes
 	result.TimeoutProbability = timeOut / float64(input.NumPaths)
 
 	return result.WinProbability, result.LossProbability, result.TimeoutProbability
+}
+
+func AnnualizedVolatility(bars []marketdata.BarTick, periodPerYear float64) (float64, error) {
+	if len(bars) < 3 {
+		return 0, fmt.Errorf("\n\tError: At least 3 bars are required.\n")
+	}
+
+	returns := make([]float64, 0, len(bars)-1)
+
+	for i := 1; i < len(bars); i++ {
+		if bars[i-1].Close <= 0 || bars[i].Close <= 0 {
+			return 0, fmt.Errorf("\n\tError: Close price must be positive.\n")
+		}
+		logReturn := math.Log(bars[i].Close / bars[i-1].Close)
+		returns = append(returns, logReturn)
+	}
+
+	var mean float64
+	for _, value := range returns {
+		mean += value
+	}
+	mean /= float64(len(returns))
+
+	var variance float64
+	for _, value := range returns {
+		difference := value - mean
+		variance += math.Pow(difference, 2)
+	}
+	variance /= float64(len(returns) - 1)
+	return math.Sqrt(variance) * math.Sqrt(periodPerYear), nil
 }

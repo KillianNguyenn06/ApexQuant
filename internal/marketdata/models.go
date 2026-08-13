@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +20,7 @@ type BarTick struct {
 	Low       float64   `json:"low"`
 	Close     float64   `json:"close"`
 	Volume    float64   `json:"volume"`
+	VWAP      float64   `json:"vwap"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -28,6 +30,7 @@ type alpacaBar struct {
 	Low       float64   `json:"l"`
 	Close     float64   `json:"c"`
 	Volume    float64   `json:"v"`
+	VWAP      float64   `json:"vw"`
 	Timestamp time.Time `json:"t"`
 }
 
@@ -102,8 +105,78 @@ func FetchAPI(symbol string, start time.Time, end time.Time, apiKey string, apiS
 			Low:       bar.Low,
 			Close:     bar.Close,
 			Volume:    bar.Volume,
+			VWAP:      bar.VWAP,
 			Timestamp: bar.Timestamp,
 		})
 	}
 	return bars, nil
+}
+
+type fredObservation struct {
+	Date  string `json:"date"`
+	Value string `json:"value"`
+}
+
+type fredResponse struct {
+	Observations []fredObservation `json:"observations"`
+}
+
+func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
+
+	if apiKey == "" {
+		return 0, fmt.Errorf("\n\tError: FRED_API_KEY is empty\n")
+	}
+	endpoint, err := url.Parse(
+		"https://api.stlouisfed.org/fred/series/observations",
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	query := endpoint.Query()
+	query.Set("series_id", "DGS3MO")
+	query.Set("api_key", apiKey)
+	query.Set("file_type", "json")
+	query.Set("observation_end", asOf.Format("2006-01-02"))
+	query.Set("sort_order", "desc")
+	query.Set("limit", "10")
+	endpoint.RawQuery = query.Encode()
+
+	client := http.Client{Timeout: 15 * time.Second}
+
+	response, err := client.Get(endpoint.String())
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf(
+			"FRED returned status %s",
+			response.Status,
+		)
+	}
+
+	var payload fredResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return 0, err
+	}
+
+	for _, observation := range payload.Observations {
+		if observation.Value == "." {
+			continue
+		}
+
+		percentage, err := strconv.ParseFloat(
+			observation.Value,
+			64,
+		)
+		if err != nil {
+			return 0, err
+		}
+
+		return percentage / 100, nil
+	}
+
+	return 0, fmt.Errorf("no risk-free rate available")
 }
