@@ -67,15 +67,87 @@ func main() {
 	monteCarloInput := mockdata.MonteCarloInput
 	monteCarloInput.RiskFreeRate = riskFreeRate
 
-	barCount := len(tradingSession.Symbols[allocations[0].Symbol].Bars)
-	for _, state := range tradingSession.Symbols {
-		if len(state.Bars) < barCount {
-			barCount = len(state.Bars)
+	referenceSymbol := allocations[0].Symbol
+	referenceBars := tradingSession.Symbols[referenceSymbol].Bars
+
+	for _, allocation := range allocations[1:] {
+		symbol := allocation.Symbol
+		bars := tradingSession.Symbols[symbol].Bars
+
+		if len(bars) != len(referenceBars) {
+			log.Fatalf("\n\tError: Bar count mismatch: %s has %d bars but %s has %d bars", referenceSymbol, len(referenceBars), symbol, len(bars))
+		}
+
+		for i := range referenceBars {
+			referenceDate := referenceBars[i].Timestamp.Format("2006-01-02")
+			symbolDate := bars[i].Timestamp.Format("2006-01-02")
+
+			if referenceDate != symbolDate {
+				log.Fatalf("\n\tError: Bar date mismatch at index %d: %s=%s, %s=%s", i, referenceSymbol, referenceDate, symbol, symbolDate)
+			}
 		}
 	}
+
+	barCount := len(referenceBars)
+
 	snapshots := make([]session.BacktestSnapshot, 0, barCount*len(tradingSession.Symbols)) // Last element create capacity of Processed Day * Num of Symbol
 	for i := 0; i < barCount; i++ {
 
+		filledOrders := make(map[string]*account.Order)
+
+		// 1. Update every symbol to today's opening price
+		for _, allocation := range allocations {
+			state := tradingSession.Symbols[allocation.Symbol]
+			state.Positions.CurrentPrice = state.Bars[i].Open
+		}
+
+		// 2. Calculate portfolio equity at today's Open
+		acc.Equity = acc.Cash
+
+		for _, allocation := range allocations {
+			state := tradingSession.Symbols[allocation.Symbol]
+			positionValue := state.Positions.Quantity * state.Positions.CurrentPrice
+			acc.Equity += positionValue
+		}
+
+		// 3. Fill orders submitted during the previous bar
+		for _, allocation := range allocations {
+			state := tradingSession.Symbols[allocation.Symbol]
+			bar := state.Bars[i]
+			if state.PendingOrder == nil {
+				continue
+			}
+			filledOrder, filled := session.FillPendingOrder(
+				*state.PendingOrder,
+				state.Positions,
+				&acc,
+				bar,
+				state.AllocationWeight,
+			)
+
+			if filled {
+				filledOrderCopy := filledOrder
+				filledOrders[allocation.Symbol] = &filledOrderCopy
+				fmt.Printf("\n===> FILLED order id=%s action=%s quantity=%.2f filled_price=%.2f\n", filledOrder.ID, filledOrder.Action, filledOrder.Quantity, filledOrder.FilledPrice)
+			}
+			state.PendingOrder = nil
+		}
+
+		// 4. Updated every symbol to today's closing price
+		for _, allocation := range allocations {
+			state := tradingSession.Symbols[allocation.Symbol]
+			state.Positions.CurrentPrice = state.Bars[i].Close
+		}
+
+		// 5. Calculate portfolio equity at today's close
+		acc.Equity = acc.Cash
+		for _, allocation := range allocations {
+			state := tradingSession.Symbols[allocation.Symbol]
+			positionValue := state.Positions.Quantity * state.Positions.CurrentPrice
+			acc.Equity += positionValue
+		}
+
+		// 6. Calculate signals for every symbols
 		for _, allocation := range allocations {
 
 			state := tradingSession.Symbols[allocation.Symbol]
@@ -86,6 +158,7 @@ func main() {
 				Because Volatility gets the whole 1-year data instead of just whats available during the run */
 			startIndex := max(0, i-19)
 			availableBars := bars[startIndex : i+1]
+
 			if len(availableBars) >= 3 {
 				volatility, err := simulation.AnnualizedVolatility(availableBars, 252)
 				if err != nil {
@@ -93,91 +166,49 @@ func main() {
 				}
 				monteCarloInput.Volatility = volatility
 			}
-			state.Positions.CurrentPrice = bar.Close
-
-			// First Loop make sure to update the most recent price of all symbol
-			for _, allocation := range allocations {
-				state := tradingSession.Symbols[allocation.Symbol]
-				state.Positions.CurrentPrice = state.Bars[i].Close
-			}
-			// Second Loop then started to calculate the Equity using those newly updated price
-			// The allocations loop make sure to visit every selected stock to add its value, state itself only works for 1 stock
-			acc.Equity = acc.Cash
-			for _, allocation := range allocations {
-				state := tradingSession.Symbols[allocation.Symbol]
-				acc.Equity += state.Positions.CurrentPrice * state.Positions.Quantity
-			}
-
-			/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-			if state.PendingOrder != nil {
-				filledOrder, filled := session.FillPendingOrder(*state.PendingOrder, state.Positions, &acc, bar, state.AllocationWeight)
-
-				if filled {
-					fmt.Printf(
-						"\n===> FILLED order id=%s action=%s quantity=%.2f filled_price=%.2f\n",
-						filledOrder.ID,
-						filledOrder.Action,
-						filledOrder.Quantity,
-						filledOrder.FilledPrice,
-					)
-				}
-
-				state.PendingOrder = nil
-			}
-
 			algorithm.VWAP(bar, &state.VWAP, &state.Indicators)
 			algorithm.StandardDeviation(bar, &state.VWAP, &state.Indicators)
 			signal := algorithm.DecisionMaking(&state.Indicators, state.Positions, bar)
 
-			fmt.Printf(
-				"\n%s close=%.2f vwap=%.2f lower=%.2f upper=%.2f signal=%s\n",
-				bar.Timestamp.Format("2006-01-02"),
-				bar.Close,
-				state.Indicators.VWAP,
-				state.Indicators.LowerBand,
-				state.Indicators.UpperBand,
-				signal.Action,
-			)
+			fmt.Printf("\n%s %s close=%.2f vwap=%.2f lower=%.2f upper=%.2f signal=%s\n", bar.Timestamp.Format("2006-01-02"), allocation.Symbol, bar.Close, state.Indicators.VWAP, state.Indicators.LowerBand, state.Indicators.UpperBand, signal.Action)
 
-			order, submitted := session.Session(
-				signal,
-				monteCarloInput,
-				state.Positions,
-				simulation.MonteCarloResult{},
-				&acc,
-				&account.Order{},
-				state.AllocationWeight,
-			)
+			var submittedOrder *account.Order
 
-			var snapshotOrder *account.Order
-
-			if submitted {
-				orderCopy := order
-
-				state.PendingOrder = &orderCopy
-				snapshotOrder = &orderCopy
-
-				fmt.Printf(
-					"\n===> SUBMITTED order id=%s action=%s quantity=%.2f status=%s\n",
-					order.ID,
-					order.Action,
-					order.Quantity,
-					order.Status,
+			// The final bar can fill orders but cannot submit a new order.
+			if i < barCount-1 {
+				order, submitted := session.Session(
+					signal,
+					monteCarloInput,
+					state.Positions,
+					simulation.MonteCarloResult{},
+					&acc,
+					&account.Order{},
+					state.AllocationWeight,
 				)
+
+				if submitted {
+					orderCopy := order
+					state.PendingOrder = &orderCopy
+					submittedOrder = &orderCopy
+
+					fmt.Printf("\n===> SUBMITTED order id=%s action=%s quantity=%.2f status=%s\n", order.ID, order.Action, order.Quantity, order.Status)
+				}
 			}
 
 			snapshot := session.BacktestSnapshot{
-				Timestamp: bar.Timestamp,
-				Bar:       bar,
-				Indicator: state.Indicators,
-				Signal:    signal,
-				Position:  *state.Positions,
-				Account:   acc,
-				Order:     snapshotOrder,
+				Timestamp:      bar.Timestamp,
+				Bar:            bar,
+				Indicator:      state.Indicators,
+				Signal:         signal,
+				Position:       *state.Positions,
+				Account:        acc,
+				SubmittedOrder: submittedOrder,
+				FilledOrder:    filledOrders[allocation.Symbol],
 			}
-			snapshots = append(snapshots, snapshot)
 
+			snapshots = append(snapshots, snapshot)
 		}
+
 		fmt.Printf("\n>>> Current Buying Power: %.2f\nCurrent Cash: %.2f\nCurrent Equity: %.2f\n", acc.BuyingPower, acc.Cash, acc.Equity)
 	}
 }

@@ -11,7 +11,7 @@ import (
 func KellyCriterion(result simulation.MonteCarloResult, position account.Position) float64 {
 
 	if position.StopLossPrice >= position.EntryPrice {
-		fmt.Printf("\n\tError: SL above Entry Price.")
+		fmt.Printf("\n\tError: Stop loss must be below entry price.")
 		return 0
 	}
 	winAmount := position.TakeProfitPrice - position.EntryPrice

@@ -80,7 +80,7 @@ func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *
 func DecisionMaking(indicator *Indicator, position *account.Position, bar marketdata.BarTick) Signal {
 
 	// Buy shares
-	if position.Quantity == 0 && position.CurrentPrice <= indicator.LowerBand {
+	if position.Quantity == 0 && indicator.StandardDeviation > 0 && position.CurrentPrice <= indicator.LowerBand {
 
 		position.EntryPrice = position.CurrentPrice
 		position.TakeProfitPrice = indicator.VWAP + 0.5*indicator.StandardDeviation
