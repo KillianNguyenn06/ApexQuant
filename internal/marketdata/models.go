@@ -38,6 +38,9 @@ type alpacaResponse struct {
 	Bars map[string][]alpacaBar `json:"bars"`
 }
 
+// =================================================
+// Fetch API for Bar Ticks
+// =================================================
 func FetchAPI(symbol string, start time.Time, end time.Time, apiKey string, apiSecret string) ([]BarTick, error) {
 
 	if apiKey == "" {
@@ -121,6 +124,9 @@ type fredResponse struct {
 	Observations []fredObservation `json:"observations"`
 }
 
+// =================================================
+// Fetch API for Risk Free Rate
+// =================================================
 func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
 
 	if apiKey == "" {

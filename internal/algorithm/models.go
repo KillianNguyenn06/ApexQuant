@@ -8,14 +8,6 @@ import (
 	"apexquant/internal/marketdata"
 )
 
-// type TradeAction string
-
-// const (
-// 	Hold TradeAction = "HOLD"
-// 	Buy  TradeAction = "BUY"
-// 	Sell TradeAction = "SELL"
-// )
-
 type Indicator struct {
 	VWAP              float64 `json:"vwap"`
 	StandardDeviation float64 `json:"standard_deviation"`
@@ -77,6 +69,9 @@ func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *
 	return indicator.StandardDeviation, indicator.UpperBand, indicator.LowerBand
 }
 
+// =================================================
+// Decision Making (send signals)
+// =================================================
 func DecisionMaking(indicator *Indicator, position *account.Position, bar marketdata.BarTick) Signal {
 
 	// Buy shares

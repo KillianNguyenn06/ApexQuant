@@ -8,6 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// =================================================
+// Submit Order using signals from DecisionMaking()
+// =================================================
 func SubmitOrder(signal algorithm.Signal, quantity float64) account.Order {
 	idV4 := uuid.New()
 	switch signal.Action {
@@ -36,6 +39,9 @@ func SubmitOrder(signal algorithm.Signal, quantity float64) account.Order {
 	return account.Order{}
 }
 
+// =================================================
+// Fill Order at Next Opening bar
+// =================================================
 func FillOrderAtNextBar(order account.Order, nextBar marketdata.BarTick) account.Order {
 	if order.Symbol != nextBar.Symbol {
 		return order

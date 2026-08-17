@@ -40,7 +40,9 @@ type PortfolioAllocation struct {
 	Weight float64 `json:"weight"`
 }
 
-// Current flow for a signal
+// =======================================================
+// Session for each signal received from DecisionMaking()
+// =======================================================
 func Session(signal algorithm.Signal, input simulation.MonteCarlo, position *account.Position, result simulation.MonteCarloResult, acc *account.Account, order *account.Order, allocationWeight float64) (account.Order, bool) {
 
 	switch signal.Action {
@@ -71,6 +73,9 @@ func Session(signal algorithm.Signal, input simulation.MonteCarlo, position *acc
 	}
 }
 
+// =================================================
+// Allocate Weight for each selected ticker
+// =================================================
 func PortfolioAllocate(tickers []string, weights []float64, allocate *[]PortfolioAllocation) error {
 	if len(tickers) < 1 || len(tickers) > 8 {
 		return fmt.Errorf("number of tickers must be between 1 and 8")
@@ -103,6 +108,9 @@ func PortfolioAllocate(tickers []string, weights []float64, allocate *[]Portfoli
 	return nil
 }
 
+// =================================================
+// Fill Pending Order
+// =================================================
 func FillPendingOrder(pendingOrder account.Order, position *account.Position, acc *account.Account, bar marketdata.BarTick, allocationWeight float64) (account.Order, bool) {
 
 	filledOrder := broker.FillOrderAtNextBar(pendingOrder, bar)

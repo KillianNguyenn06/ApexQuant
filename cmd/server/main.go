@@ -9,12 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"apexquant/internal/account"
-	"apexquant/internal/algorithm"
+	"apexquant/internal/backtest"
 	"apexquant/internal/marketdata"
 	"apexquant/internal/mockdata"
 	"apexquant/internal/session"
-	"apexquant/internal/simulation"
 )
 
 func main() {
@@ -26,193 +24,101 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	fmt.Print("\n\tPortfolio: ", allocations)
 
 	end := time.Now().UTC()
 	start := end.AddDate(-1, 0, 0)
 
-	tradingSession := session.TradingSession{
-		StartingCapital: mockdata.InitialAccount.Equity,
-		Cash:            mockdata.InitialAccount.Cash,
-		Symbols:         make(map[string]*session.SymbolState),
-		StartedAt:       time.Now(),
-	}
+	barsBySymbol := make(
+		map[string][]marketdata.BarTick,
+		len(allocations),
+	)
 
 	for _, allocation := range allocations {
 		bars, err := marketdata.FetchAPI(allocation.Symbol, start, end, os.Getenv("APCA_API_KEY_ID"), os.Getenv("APCA_API_SECRET_KEY"))
 		if err != nil {
 			log.Fatal(err)
 		}
-		if len(bars) < 2 {
-			log.Fatal("not enough bars returned")
-		}
 
-		position := mockdata.InitialPosition
-		position.Symbol = allocation.Symbol
-		tradingSession.Symbols[allocation.Symbol] = &session.SymbolState{
-			Bars:             bars,
-			Positions:        &position,
-			AllocationWeight: allocation.Weight,
-		}
+		barsBySymbol[allocation.Symbol] = bars
 
 		fmt.Printf("\n\tLoaded %d bars for %s with %.2f%% allocation", len(bars), allocation.Symbol, allocation.Weight*100)
 	}
 
-	riskFreeRate, err := marketdata.FetchRiskFreeRate(os.Getenv("FRED_API_KEY"), time.Now())
+	riskFreeRate, err := marketdata.FetchRiskFreeRate(
+		os.Getenv("FRED_API_KEY"),
+		time.Now(),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	acc := mockdata.InitialAccount
 	monteCarloInput := mockdata.MonteCarloInput
 	monteCarloInput.RiskFreeRate = riskFreeRate
 
-	referenceSymbol := allocations[0].Symbol
-	referenceBars := tradingSession.Symbols[referenceSymbol].Bars
-
-	for _, allocation := range allocations[1:] {
-		symbol := allocation.Symbol
-		bars := tradingSession.Symbols[symbol].Bars
-
-		if len(bars) != len(referenceBars) {
-			log.Fatalf("\n\tError: Bar count mismatch: %s has %d bars but %s has %d bars", referenceSymbol, len(referenceBars), symbol, len(bars))
-		}
-
-		for i := range referenceBars {
-			referenceDate := referenceBars[i].Timestamp.Format("2006-01-02")
-			symbolDate := bars[i].Timestamp.Format("2006-01-02")
-
-			if referenceDate != symbolDate {
-				log.Fatalf("\n\tError: Bar date mismatch at index %d: %s=%s, %s=%s", i, referenceSymbol, referenceDate, symbol, symbolDate)
-			}
-		}
+	result, err := backtest.RunBacktest(
+		backtest.BacktestConfig{
+			InitialAccount:   mockdata.InitialAccount,
+			Allocations:      allocations,
+			BarsBySymbol:     barsBySymbol,
+			MonteCarloInput:  monteCarloInput,
+			VolatilityWindow: 20,
+			PeriodsPerYear:   252,
+		},
+	)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	barCount := len(referenceBars)
+	for _, snapshot := range result.Snapshots {
+		fmt.Printf(
+			"\n%s %s close=%.2f vwap=%.2f lower=%.2f upper=%.2f signal=%s",
+			snapshot.Timestamp.Format("2006-01-02"),
+			snapshot.Bar.Symbol,
+			snapshot.Bar.Close,
+			snapshot.Indicator.VWAP,
+			snapshot.Indicator.LowerBand,
+			snapshot.Indicator.UpperBand,
+			snapshot.Signal.Action,
+		)
 
-	snapshots := make([]session.BacktestSnapshot, 0, barCount*len(tradingSession.Symbols)) // Last element create capacity of Processed Day * Num of Symbol
-	for i := 0; i < barCount; i++ {
+		if snapshot.FilledOrder != nil {
+			order := snapshot.FilledOrder
 
-		filledOrders := make(map[string]*account.Order)
-
-		// 1. Update every symbol to today's opening price
-		for _, allocation := range allocations {
-			state := tradingSession.Symbols[allocation.Symbol]
-			state.Positions.CurrentPrice = state.Bars[i].Open
-		}
-
-		// 2. Calculate portfolio equity at today's Open
-		acc.Equity = acc.Cash
-
-		for _, allocation := range allocations {
-			state := tradingSession.Symbols[allocation.Symbol]
-			positionValue := state.Positions.Quantity * state.Positions.CurrentPrice
-			acc.Equity += positionValue
-		}
-
-		// 3. Fill orders submitted during the previous bar
-		for _, allocation := range allocations {
-			state := tradingSession.Symbols[allocation.Symbol]
-			bar := state.Bars[i]
-			if state.PendingOrder == nil {
-				continue
-			}
-			filledOrder, filled := session.FillPendingOrder(
-				*state.PendingOrder,
-				state.Positions,
-				&acc,
-				bar,
-				state.AllocationWeight,
+			fmt.Printf(
+				"\n===> FILLED order id=%s action=%s quantity=%.2f filled_price=%.2f",
+				order.ID,
+				order.Action,
+				order.Quantity,
+				order.FilledPrice,
 			)
-
-			if filled {
-				filledOrderCopy := filledOrder
-				filledOrders[allocation.Symbol] = &filledOrderCopy
-				fmt.Printf("\n===> FILLED order id=%s action=%s quantity=%.2f filled_price=%.2f\n", filledOrder.ID, filledOrder.Action, filledOrder.Quantity, filledOrder.FilledPrice)
-			}
-			state.PendingOrder = nil
 		}
 
-		// 4. Updated every symbol to today's closing price
-		for _, allocation := range allocations {
-			state := tradingSession.Symbols[allocation.Symbol]
-			state.Positions.CurrentPrice = state.Bars[i].Close
+		if snapshot.SubmittedOrder != nil {
+			order := snapshot.SubmittedOrder
+
+			fmt.Printf(
+				"\n===> SUBMITTED order id=%s action=%s quantity=%.2f status=%s",
+				order.ID,
+				order.Action,
+				order.Quantity,
+				order.Status,
+			)
 		}
-
-		// 5. Calculate portfolio equity at today's close
-		acc.Equity = acc.Cash
-		for _, allocation := range allocations {
-			state := tradingSession.Symbols[allocation.Symbol]
-			positionValue := state.Positions.Quantity * state.Positions.CurrentPrice
-			acc.Equity += positionValue
-		}
-
-		// 6. Calculate signals for every symbols
-		for _, allocation := range allocations {
-
-			state := tradingSession.Symbols[allocation.Symbol]
-			bars := state.Bars
-			bar := bars[i]
-
-			/*	Have to evaluate availableBar else if call the whole function for 1-year, it causes look-ahead bias
-				Because Volatility gets the whole 1-year data instead of just whats available during the run */
-			startIndex := max(0, i-19)
-			availableBars := bars[startIndex : i+1]
-
-			if len(availableBars) >= 3 {
-				volatility, err := simulation.AnnualizedVolatility(availableBars, 252)
-				if err != nil {
-					log.Fatal(err)
-				}
-				monteCarloInput.Volatility = volatility
-			}
-			algorithm.VWAP(bar, &state.VWAP, &state.Indicators)
-			algorithm.StandardDeviation(bar, &state.VWAP, &state.Indicators)
-			signal := algorithm.DecisionMaking(&state.Indicators, state.Positions, bar)
-
-			fmt.Printf("\n%s %s close=%.2f vwap=%.2f lower=%.2f upper=%.2f signal=%s\n", bar.Timestamp.Format("2006-01-02"), allocation.Symbol, bar.Close, state.Indicators.VWAP, state.Indicators.LowerBand, state.Indicators.UpperBand, signal.Action)
-
-			var submittedOrder *account.Order
-
-			// The final bar can fill orders but cannot submit a new order.
-			if i < barCount-1 {
-				order, submitted := session.Session(
-					signal,
-					monteCarloInput,
-					state.Positions,
-					simulation.MonteCarloResult{},
-					&acc,
-					&account.Order{},
-					state.AllocationWeight,
-				)
-
-				if submitted {
-					orderCopy := order
-					state.PendingOrder = &orderCopy
-					submittedOrder = &orderCopy
-
-					fmt.Printf("\n===> SUBMITTED order id=%s action=%s quantity=%.2f status=%s\n", order.ID, order.Action, order.Quantity, order.Status)
-				}
-			}
-
-			snapshot := session.BacktestSnapshot{
-				Timestamp:      bar.Timestamp,
-				Bar:            bar,
-				Indicator:      state.Indicators,
-				Signal:         signal,
-				Position:       *state.Positions,
-				Account:        acc,
-				SubmittedOrder: submittedOrder,
-				FilledOrder:    filledOrders[allocation.Symbol],
-			}
-
-			snapshots = append(snapshots, snapshot)
-		}
-
-		fmt.Printf("\n>>> Current Buying Power: %.2f\nCurrent Cash: %.2f\nCurrent Equity: %.2f\n", acc.BuyingPower, acc.Cash, acc.Equity)
 	}
+
+	fmt.Printf(
+		"\n\n>>> Final Buying Power: %.2f\nFinal Cash: %.2f\nFinal Equity: %.2f\n",
+		result.FinalAccount.BuyingPower,
+		result.FinalAccount.Cash,
+		result.FinalAccount.Equity,
+	)
 }
 
+// =================================================
+// Read Tickers Allocation
+// =================================================
 func readPortfolioAllocation(reader *bufio.Reader) ([]session.PortfolioAllocation, error) {
 	var stockCount int
 
@@ -249,7 +155,7 @@ func readPortfolioAllocation(reader *bufio.Reader) ([]session.PortfolioAllocatio
 		}
 		for {
 			isValid := true
-			fmt.Printf("\n\t%s allocation percentage (Total allocation left %.2f%%\n): ", symbol, percentageLeft)
+			fmt.Printf("\n\t%s allocation percentage (Total allocation left %.2f%%): ", symbol, percentageLeft)
 			fmt.Fscan(reader, &percent)
 			if percent <= 0 || percent > percentageLeft {
 				isValid = false

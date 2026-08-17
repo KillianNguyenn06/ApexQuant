@@ -18,6 +18,7 @@ type MonteCarlo struct {
 	TimeHorizon  float64 `json:"time_horizon"`   // T
 	NumPaths     int     `json:"num_paths"`      // N e.g: 10000
 	NumSteps     int     `json:"num_steps"`      // 252 for Standard, 100 for shorter interval
+	Seed         int64   `json:"seed"`
 }
 
 type MonteCarloResult struct {
@@ -27,6 +28,9 @@ type MonteCarloResult struct {
 	TimeoutProbability float64 `json:"timeout_probability"`
 }
 
+// =================================================
+// Geometric Brownian Motion (GBM) Model
+// =================================================
 func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloResult, signal algorithm.Signal) (float64, float64, float64) {
 
 	wins := 0.0
@@ -39,13 +43,18 @@ func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloRes
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
+	seed := input.Seed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
+
 	for i := 0; i < input.NumPaths; i++ {
 		wg.Add(1)
 		go func(pathIndex int) {
 			defer wg.Done()
 			outcome := "timeout"
 			st := signal.Price
-			localRand := rand.New(rand.NewSource(time.Now().UnixNano() + int64(pathIndex))) // Create a new random source for each goroutine
+			localRand := rand.New(rand.NewSource(seed + int64(pathIndex))) // Create a new random source for each goroutine
 			for j := 0; j < input.NumSteps; j++ {
 				z := localRand.NormFloat64()           // Generate a random number from a standard normal distribution
 				st = st * math.Exp(drift+volatility*z) // Calculate the next price using the GBM formula
@@ -77,6 +86,9 @@ func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloRes
 	return result.WinProbability, result.LossProbability, result.TimeoutProbability
 }
 
+// =================================================
+// Calculate Annual Volatility
+// =================================================
 func AnnualizedVolatility(bars []marketdata.BarTick, periodPerYear float64) (float64, error) {
 	if len(bars) < 3 {
 		return 0, fmt.Errorf("\n\tError: At least 3 bars are required.\n")

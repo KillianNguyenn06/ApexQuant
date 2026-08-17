@@ -7,7 +7,9 @@ import (
 	"math"
 )
 
-// Put kelly, position sizing, risk
+// =================================================
+// Kelly Criterion Fraction
+// =================================================
 func KellyCriterion(result simulation.MonteCarloResult, position account.Position) float64 {
 
 	if position.StopLossPrice >= position.EntryPrice {
@@ -29,14 +31,23 @@ func KellyCriterion(result simulation.MonteCarloResult, position account.Positio
 	return fraction
 }
 
+// =================================================
+// Risk Per Share Calculation
+// =================================================
 func RiskPerShare(position account.Position) float64 {
 	return math.Abs(position.EntryPrice - position.StopLossPrice)
 }
 
+// =================================================
+// Total Dollar Risk Calculation
+// =================================================
 func DollarRisk(position account.Account, kellyFraction float64) float64 {
 	return position.Equity * kellyFraction
 }
 
+// =================================================
+// Order's quantity Calculation
+// =================================================
 func QuantityByRisk(riskPerShare float64, dollarRisk float64) float64 {
 	if riskPerShare == 0 {
 		fmt.Printf("\n\tRisk Per Share is low: %v", riskPerShare)
@@ -45,6 +56,9 @@ func QuantityByRisk(riskPerShare float64, dollarRisk float64) float64 {
 	return dollarRisk / riskPerShare
 }
 
+// =================================================
+// Evaluate Risk
+// =================================================
 func EvaluateRisk(result simulation.MonteCarloResult, position account.Position, acc account.Account, allocationWeight float64) float64 {
 	fractionMultiplier := 0.2 // Personal Choice of Risk Management
 	kellyFraction := fractionMultiplier * KellyCriterion(result, position)
