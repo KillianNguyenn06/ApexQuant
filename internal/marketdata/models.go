@@ -1,8 +1,10 @@
 package marketdata
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -35,13 +37,32 @@ type alpacaBar struct {
 }
 
 type alpacaResponse struct {
-	Bars map[string][]alpacaBar `json:"bars"`
+	Bars          map[string][]alpacaBar `json:"bars"`
+	NextPageToken string                 `json:"next_page_token"`
 }
 
 // =================================================
 // Fetch API for Bar Ticks
 // =================================================
-func FetchAPI(symbol string, start time.Time, end time.Time, apiKey string, apiSecret string) ([]BarTick, error) {
+// Client keeps provider configuration outside the backtest engine.
+type Client struct {
+	HTTPClient *http.Client
+	AlpacaURL  string
+	FREDURL    string
+}
+
+func NewClient() *Client {
+	return &Client{HTTPClient: &http.Client{Timeout: 15 * time.Second}, AlpacaURL: "https://data.alpaca.markets/v2/stocks/bars", FREDURL: "https://api.stlouisfed.org/fred/series/observations"}
+}
+
+func FetchAPI(symbol string, start, end time.Time, apiKey, apiSecret string) ([]BarTick, error) {
+	return NewClient().FetchBars(context.Background(), symbol, start, end, apiKey, apiSecret)
+}
+
+func (c *Client) FetchBars(ctx context.Context, symbol string, start, end time.Time, apiKey, apiSecret string) ([]BarTick, error) {
+	if start.IsZero() || end.IsZero() || !start.Before(end) {
+		return nil, fmt.Errorf("start must precede end")
+	}
 
 	if apiKey == "" {
 		return nil, fmt.Errorf("\n\tError: APCA_API_KEY_ID is empty\n")
@@ -56,7 +77,7 @@ func FetchAPI(symbol string, start time.Time, end time.Time, apiKey string, apiS
 	}
 
 	endpoint, err := url.Parse(
-		"https://data.alpaca.markets/v2/stocks/bars",
+		c.AlpacaURL,
 	)
 	if err != nil {
 		return nil, err
@@ -68,51 +89,61 @@ func FetchAPI(symbol string, start time.Time, end time.Time, apiKey string, apiS
 	query.Set("start", start.UTC().Format(time.RFC3339))
 	query.Set("end", end.UTC().Format(time.RFC3339))
 	query.Set("limit", "1000")
-	query.Set("feed", "iex")
+	query.Set("feed", "sip")
+	query.Set("sort", "asc")
 	query.Set("adjustment", "raw")
-	endpoint.RawQuery = query.Encode()
-
-	request, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
-	if err != nil {
+	var bars []BarTick
+	seen := map[string]bool{}
+	for {
+		endpoint.RawQuery = query.Encode()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Alpaca request")
+		}
+		request.Header.Set("APCA-API-KEY-ID", apiKey)
+		request.Header.Set("APCA-API-SECRET-KEY", apiSecret)
+		var payload alpacaResponse
+		if err := c.getJSON(request, &payload, "Alpaca"); err != nil {
+			return nil, err
+		}
+		for _, bar := range payload.Bars[symbol] {
+			bars = append(bars, BarTick{Symbol: symbol, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close, Volume: bar.Volume, VWAP: bar.VWAP, Timestamp: bar.Timestamp})
+		}
+		token := payload.NextPageToken
+		if token == "" {
+			break
+		}
+		if seen[token] {
+			return nil, fmt.Errorf("Alpaca repeated pagination token")
+		}
+		seen[token] = true
+		query.Set("page_token", token)
+	}
+	if err := ValidateBars(symbol, bars); err != nil {
 		return nil, err
 	}
-
-	request.Header.Set("APCA-API-KEY-ID", apiKey)
-	request.Header.Set("APCA-API-SECRET-KEY", apiSecret)
-
-	client := http.Client{Timeout: 15 * time.Second}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Alpaca returned status: %s", response.Status)
-	}
-
-	var payload alpacaResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, err
-	}
-
-	apiBars := payload.Bars[symbol]
-	bars := make([]BarTick, 0, len(apiBars))
-
-	for _, bar := range apiBars {
-		bars = append(bars, BarTick{
-			Symbol:    symbol,
-			Open:      bar.Open,
-			High:      bar.High,
-			Low:       bar.Low,
-			Close:     bar.Close,
-			Volume:    bar.Volume,
-			VWAP:      bar.VWAP,
-			Timestamp: bar.Timestamp,
-		})
+	for _, bar := range bars {
+		if bar.Timestamp.Before(start) || bar.Timestamp.After(end) {
+			return nil, fmt.Errorf("%s bar outside requested range", symbol)
+		}
 	}
 	return bars, nil
+}
+
+// getJSON never exposes provider URLs or response bodies, which may contain credentials.
+func (c *Client) getJSON(request *http.Request, target any, provider string) error {
+	response, err := c.HTTPClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("%s request failed", provider)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s returned status %d", provider, response.StatusCode)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		return fmt.Errorf("%s returned invalid JSON", provider)
+	}
+	return nil
 }
 
 type fredObservation struct {
@@ -128,12 +159,19 @@ type fredResponse struct {
 // Fetch API for Risk Free Rate
 // =================================================
 func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
+	return NewClient().FetchRiskFreeRate(context.Background(), apiKey, asOf)
+}
+
+func (c *Client) FetchRiskFreeRate(ctx context.Context, apiKey string, asOf time.Time) (float64, error) {
+	if asOf.IsZero() {
+		return 0, fmt.Errorf("as-of date is required")
+	}
 
 	if apiKey == "" {
 		return 0, fmt.Errorf("\n\tError: FRED_API_KEY is empty\n")
 	}
 	endpoint, err := url.Parse(
-		"https://api.stlouisfed.org/fred/series/observations",
+		c.FREDURL,
 	)
 	if err != nil {
 		return 0, err
@@ -148,27 +186,20 @@ func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
 	query.Set("limit", "10")
 	endpoint.RawQuery = query.Encode()
 
-	client := http.Client{Timeout: 15 * time.Second}
-
-	response, err := client.Get(endpoint.String())
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("invalid FRED request")
 	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf(
-			"FRED returned status %s",
-			response.Status,
-		)
-	}
-
 	var payload fredResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := c.getJSON(request, &payload, "FRED"); err != nil {
 		return 0, err
 	}
 
 	for _, observation := range payload.Observations {
+		date, err := time.Parse("2006-01-02", observation.Date)
+		if err != nil || date.Format("2006-01-02") > asOf.Format("2006-01-02") {
+			return 0, fmt.Errorf("invalid FRED observation date")
+		}
 		if observation.Value == "." {
 			continue
 		}
@@ -177,8 +208,8 @@ func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
 			observation.Value,
 			64,
 		)
-		if err != nil {
-			return 0, err
+		if err != nil || math.IsNaN(percentage) || math.IsInf(percentage, 0) {
+			return 0, fmt.Errorf("invalid FRED rate")
 		}
 
 		return percentage / 100, nil

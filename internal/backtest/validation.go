@@ -1,11 +1,25 @@
 package backtest
 
 import (
+	"apexquant/internal/marketdata"
 	"apexquant/internal/session"
 	"fmt"
+	"math"
+	"strings"
 )
 
 func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error) {
+	for _, value := range []float64{config.InitialAccount.Cash, config.InitialAccount.Equity, config.InitialAccount.BuyingPower, config.PeriodsPerYear, config.MonteCarloInput.TimeHorizon, config.MonteCarloInput.Volatility, config.MonteCarloInput.RiskFreeRate} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, fmt.Errorf("configuration values must be finite")
+		}
+	}
+	if config.InitialAccount.Cash <= 0 || config.InitialAccount.BuyingPower < 0 || config.InitialAccount.Equity != config.InitialAccount.Cash {
+		return nil, fmt.Errorf("initial account must have positive cash, matching equity, and nonnegative buying power")
+	}
+	if config.MonteCarloInput.Volatility < 0 {
+		return nil, fmt.Errorf("volatility cannot be negative")
+	}
 	if config.VolatilityWindow < 3 {
 		return nil, fmt.Errorf("volatility window must be at least 3")
 	}
@@ -31,6 +45,7 @@ func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error
 	usedSymbols := make(map[string]bool)
 
 	for _, allocation := range config.Allocations {
+		allocation.Symbol = strings.ToUpper(strings.TrimSpace(allocation.Symbol))
 		if usedSymbols[allocation.Symbol] {
 			return nil, fmt.Errorf("duplicated symbol: %s", allocation.Symbol)
 		}
@@ -56,10 +71,8 @@ func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error
 			return nil, fmt.Errorf("%s requires at least two bars", allocation.Symbol)
 		}
 
-		for i, bar := range bars {
-			if bar.Symbol != allocation.Symbol {
-				return nil, fmt.Errorf("%s bar %d contains symbol %s", allocation.Symbol, i, bar.Symbol)
-			}
+		if err := marketdata.ValidateBars(allocation.Symbol, bars); err != nil {
+			return nil, err
 		}
 	}
 	return allocations, nil
@@ -83,10 +96,10 @@ func validateBarTimeline(allocations []session.PortfolioAllocation, symbols map[
 		}
 
 		for i := range referenceBars {
-			referenceDate := referenceBars[i].Timestamp.Format(
+			referenceDate := referenceBars[i].Timestamp.UTC().Format(
 				"2006-01-02",
 			)
-			symbolDate := bars[i].Timestamp.Format(
+			symbolDate := bars[i].Timestamp.UTC().Format(
 				"2006-01-02",
 			)
 

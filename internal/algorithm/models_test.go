@@ -182,3 +182,25 @@ func TestDecisionMakingSellAndHold(t *testing.T) {
 		})
 	}
 }
+
+func TestZeroVolumeThenRecovery(t *testing.T) {
+	state := VWAPState{}
+	indicator := Indicator{VWAP: 123, StandardDeviation: 5, UpperBand: 128, LowerBand: 118}
+	zero := marketdata.BarTick{}
+	VWAP(zero, &state, &indicator)
+	StandardDeviation(zero, &state, &indicator)
+	if indicator.VWAP != 0 || indicator.StandardDeviation != 0 || indicator.UpperBand != 0 || indicator.LowerBand != 0 {
+		t.Fatalf("zero-volume result: %+v", indicator)
+	}
+	bar := marketdata.BarTick{Volume: 10, VWAP: 100}
+	VWAP(bar, &state, &indicator)
+	StandardDeviation(bar, &state, &indicator)
+	if indicator.VWAP != 100 || indicator.StandardDeviation != 0 || indicator.UpperBand != 100 || indicator.LowerBand != 100 {
+		t.Fatalf("recovery result: %+v", indicator)
+	}
+	VWAP(zero, &state, &indicator)
+	StandardDeviation(zero, &state, &indicator)
+	if indicator.VWAP != 100 || indicator.StandardDeviation != 0 {
+		t.Fatal("zero-volume bar changed accumulated indicators")
+	}
+}

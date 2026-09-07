@@ -27,8 +27,10 @@ func main() {
 
 	fmt.Print("\n\tPortfolio: ", allocations)
 
-	end := time.Now().UTC()
-	start := end.AddDate(-1, 0, 0)
+	start, end, err := marketdata.CompletedDailyRange(time.Now())
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	barsBySymbol := make(
 		map[string][]marketdata.BarTick,

@@ -110,6 +110,11 @@ ApexQuant/
 │   ├── broker/
 │   │   ├── order.go
 │   │   └── order_test.go
+│   ├── backtest/
+│   │   ├── engine.go
+│   │   ├── models.go
+│   │   ├── validation.go
+│   │   └── live_test.go
 │   ├── marketdata/
 │   │   └── models.go
 │   ├── mockdata/
@@ -210,7 +215,7 @@ AMD allocation percentage: 10
 
 The allocations must total exactly 100%.
 
-During the backtest, the terminal displays:
+After the backtest completes, the terminal displays stored snapshots:
 
 - Trading date.
 - Symbol.
@@ -296,8 +301,9 @@ Completed:
 Current phase:
 
 ```text
-Extract the backtest loop into a reusable RunBacktest function
-and add deterministic multi-stock integration tests.
+Phase 2 complete: authenticated SIP/FRED fetching, input validation,
+and one-year multi-symbol accounting reconciliation.
+Next: Phase 3 — HTTP API.
 ```
 
 ## Roadmap
@@ -348,7 +354,7 @@ and add deterministic multi-stock integration tests.
 ### Phase 7 — Future Expansion
 
 - Five-minute historical bars.
-- Alpaca pagination.
+- Further market-data expansion.
 - Split and dividend adjustments.
 - Trading fees and slippage.
 - Saved backtest results.
@@ -359,10 +365,10 @@ and add deterministic multi-stock integration tests.
 - The application currently runs through the terminal.
 - Historical bars are currently daily bars.
 - Symbols must return matching trading dates.
-- Alpaca pagination is not implemented.
+- Alpaca SIP daily bars are paginated; empty, malformed, and inconsistent series are rejected.
 - Market data currently uses raw price adjustment.
 - The current risk-free rate is applied across the backtest.
-- Monte Carlo simulations currently use time-based random seeds.
+- Seed 0 uses time-based randomness; nonzero seeds support repeatable simulations.
 - Trading fees and slippage are not yet included.
 - Backtest results are not yet persisted.
 - The frontend and SSE stream are not yet implemented.
@@ -370,3 +376,45 @@ and add deterministic multi-stock integration tests.
 ## Disclaimer
 
 ApexQuant is an educational backtesting project. It does not provide financial advice and should not be used as the sole basis for real investment decisions.
+
+## Phase 2 verification
+
+The provider client uses consolidated US SIP data, ascending daily bars, and all
+pagination tokens. `CompletedDailyRange` excludes the current New York calendar
+session to avoid partial daily bars. The default adjustment remains `raw`.
+`Client` accepts an HTTP client and provider URLs for isolated tests; the engine
+still receives `BacktestConfig` and performs no network or credential access.
+The existing package-level fetch functions remain compatible wrappers.
+
+Shared daily-bar validation rejects non-finite/non-positive OHLC, inconsistent
+OHLC ranges, negative volume, invalid VWAP, zero timestamps, and duplicate or
+unordered UTC dates. Zero-volume bars contribute no VWAP weight. Allocation
+symbols normalize before duplicate checks; bars remain keyed by canonical symbol.
+Initial accounts represent cash-only starts (equity equals cash); non-finite
+configuration values are rejected. Matching multi-symbol dates remain mandatory.
+
+Verified real-data run: September 5, 2025 through September 4, 2026, AAPL/MSFT at
+50% each, $50,000 initial cash, 100,000 Monte Carlo paths, 252 steps, seed 42.
+Each symbol returned 252 SIP daily bars. FRED returned 3.89% (September 3, 2026).
+The run produced 504 snapshots, two buy fills, two sell fills, and 390 Hold
+snapshots. Both positions ended with zero quantity; final cash, buying power,
+and equity were $49,702.00601245. Every timestamp's accounting was reconstructed
+independently from fills and closing prices. JSON encoding passed.
+
+Ordinary tests use fake HTTP transports and require no secrets or network.
+To repeat the optional provider/portfolio test, first export `APCA_API_KEY_ID`,
+`APCA_API_SECRET_KEY`, and `FRED_API_KEY` securely in your execution environment:
+
+```sh
+APEXQUANT_LIVE_TEST=1 go test ./internal/backtest -run '^TestLivePortfolioReconciliation$' -count=1 -v -timeout 10m
+```
+
+The live test deliberately uses the fixed verification dates above. Data providers
+may revise history; a fixed seed controls simulation randomness, not revisions.
+The application does not automatically load `.env`; descriptive colon-separated
+key notes are not shell environment assignments. Never commit credentials.
+
+This verification establishes input and accounting correctness for the tested
+run, not strategy profitability. Fees, slippage, corporate-action treatment,
+historical risk-free-rate curves, and Monte Carlo concurrency optimization remain
+future work. HTTP/SSE/UI are not implemented by Phase 2.

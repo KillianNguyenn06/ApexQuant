@@ -89,7 +89,7 @@ func PortfolioAllocate(tickers []string, weights []float64, allocate *[]Portfoli
 	*allocate = make([]PortfolioAllocation, 0, len(tickers))
 
 	for i := range tickers {
-		if weights[i] <= 0 {
+		if math.IsNaN(weights[i]) || math.IsInf(weights[i], 0) || weights[i] <= 0 {
 			return fmt.Errorf("%s has an invalid weight", tickers[i])
 		}
 

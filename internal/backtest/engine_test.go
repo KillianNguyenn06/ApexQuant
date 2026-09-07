@@ -57,6 +57,8 @@ func TestRunBacktestMultiSymbol(t *testing.T) {
 		t.Fatalf("RunBacktest returned an error: %v", err)
 	}
 
+	reconcile(t, config, result)
+
 	if got, want := len(result.Snapshots), 8; got != want {
 		t.Fatalf("snapshot count = %d, want %d", got, want)
 	}

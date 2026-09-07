@@ -46,6 +46,7 @@ func VWAP(bar marketdata.BarTick, vwapState *VWAPState, indicator *Indicator) fl
 	vwapState.TotalPriceVolume += bar.VWAP * bar.Volume
 	vwapState.TotalVolume += bar.Volume
 	if vwapState.TotalVolume == 0 {
+		indicator.VWAP = 0
 		return 0
 	}
 	indicator.VWAP = vwapState.TotalPriceVolume / vwapState.TotalVolume
@@ -57,6 +58,10 @@ func VWAP(bar marketdata.BarTick, vwapState *VWAPState, indicator *Indicator) fl
 // =================================================
 func StandardDeviation(bar marketdata.BarTick, VWAPState *VWAPState, indicator *Indicator) (float64, float64, float64) {
 
+	if VWAPState.TotalVolume == 0 {
+		indicator.StandardDeviation, indicator.UpperBand, indicator.LowerBand = 0, 0, 0
+		return 0, 0, 0
+	}
 	k := 1.0                                                                // band multiplier (commonly 1,2 or 3)
 	VWAPState.TotalSquaredPriceVolume += math.Pow(bar.VWAP, 2) * bar.Volume // Basically the numerator
 	variance := VWAPState.TotalSquaredPriceVolume/VWAPState.TotalVolume - math.Pow(indicator.VWAP, 2)
