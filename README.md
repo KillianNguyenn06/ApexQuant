@@ -186,7 +186,7 @@ go mod download
 Run:
 
 ```bash
-go run ./cmd/server
+go run ./cmd/backtest
 ```
 
 The terminal will ask for:
@@ -301,9 +301,9 @@ Completed:
 Current phase:
 
 ```text
-Phase 2 complete: authenticated SIP/FRED fetching, input validation,
-and one-year multi-symbol accounting reconciliation.
-Next: Phase 3 — HTTP API.
+Phase 3 complete: HTTP contract, reusable service, bounded background jobs,
+and API integration/concurrency verification.
+Next: Phase 4 — SSE historical replay.
 ```
 
 ## Roadmap
@@ -362,7 +362,7 @@ Next: Phase 3 — HTTP API.
 
 ## Known Limitations
 
-- The application currently runs through the terminal.
+- The application supports a terminal runner and a local HTTP API.
 - Historical bars are currently daily bars.
 - Symbols must return matching trading dates.
 - Alpaca SIP daily bars are paginated; empty, malformed, and inconsistent series are rejected.
@@ -418,3 +418,105 @@ This verification establishes input and accounting correctness for the tested
 run, not strategy profitability. Fees, slippage, corporate-action treatment,
 historical risk-free-rate curves, and Monte Carlo concurrency optimization remain
 future work. HTTP/SSE/UI are not implemented by Phase 2.
+
+## Phase 3 progress
+
+Task 1 defines the [HTTP API contract](docs/http-api.md): dedicated JSON models,
+request validation, percentage/date conversion, and result mapping with explicit
+unavailable values. Contract tests use synthetic inputs and the existing engine.
+Task 2 adds a reusable backtest service, bounded background jobs, and HTTP handlers.
+Task 3 passed the phase-wide API verification and review gate.
+
+
+### Running the HTTP API
+
+Export the three provider credentials as described above, then run:
+
+```sh
+go run ./cmd/server
+```
+
+The default address is `127.0.0.1:8080`. This is a local, single-user API with no
+user authentication; it is not configured as a public deployment. Run
+`go run ./cmd/server -h` to see configurable limits and simulation settings.
+The terminal workflow is preserved at `go run ./cmd/backtest`.
+
+Example submission (no provider keys belong in the request):
+
+```sh
+curl -i http://127.0.0.1:8080/api/backtests \
+  -H 'Content-Type: application/json' \
+  -d '{"initial_capital":50000,"allocations":[{"symbol":"AAPL","percent":50},{"symbol":"MSFT","percent":50}],"start_date":"2025-09-05","end_date":"2026-09-04"}'
+```
+
+Use the returned ID to query `/api/backtests/{id}` and, after completion,
+`/api/backtests/{id}/result`. A request disconnect does not cancel an admitted job.
+Jobs and results are lost on process restart. The service uses one FRED rate as of
+the requested end date across the simulation; it does not yet model a historical
+rate curve or vintage publication availability.
+
+Default protection settings:
+
+| Setting | Default |
+| --- | --- |
+| Running jobs / waiting queue | 1 / 4 |
+| Request body / headers | 16 KiB / 16 KiB |
+| Simultaneous HTTP handlers | 16 |
+| Requested range | 366 calendar days |
+| Estimated snapshots | 2,928 (calendar days times symbols) |
+| Shared request bucket | 120/minute refill, burst 30 |
+| Shared submission bucket | 6/minute refill, burst 2 |
+| Finished records / retention | 20 / 30 minutes |
+| Serialized result / all stored results | 16 MiB / 64 MiB |
+
+Rate limits are shared across local clients, including failed requests. Status
+polling once per second fits the normal request budget. Exhaustion returns 429;
+a full queue or simultaneous-handler limit returns 503. Oversized input returns
+413, unsupported content type returns 415, and an excessive requested workload
+returns 400. No limit silently lowers simulation fidelity or skips bars.
+Finished jobs are evicted oldest first when retention/count/byte limits are hit;
+expired or evicted IDs return 404. A result that exceeds its individual limit
+fails explicitly rather than returning truncated snapshots. Byte limits bound
+retained serialized results; temporary computation/encoding allocations are
+additionally constrained by the input range and worker count.
+
+HTTP timeouts are 5s for headers, 10s for request reading, 30s for response writing,
+and 60s for idle connections. Provider requests retain their 15s timeout.
+Shutdown stops admission, cancels queued/provider work, and allows up to 30s for
+HTTP requests and running jobs to finish. The engine has no mid-computation
+cancellation: expiration of that grace period ends the process, not a successful
+job. Monte Carlo's internal goroutine fan-out is unchanged.
+
+Task 2 tests use fake providers with real handlers/service/engine and verify job
+admission, transitions, retrieval, rate/capacity limits, retention, safe failures,
+and shutdown. No real provider calls are required by these tests.
+
+
+### Phase 3 final verification (2026-09-30)
+
+`internal/api/phase3_test.go` adds the final integration checks:
+
+- A synthetic trading portfolio passes through handlers, jobs, service, and engine.
+  Its complete API result matches a separately executed engine result after
+  excluding randomly generated order IDs. The fixture verifies next-open buy
+  and sell fills, final accounting, and no final-bar submission.
+- Both bar-fetch and FRED failures become safe failed-job responses. Mismatched
+  symbol dates fail explicitly. Failed results return 409; expired IDs return 404.
+- Concurrent HTTP submissions stay within queue capacity and preserve unique job
+  IDs. Status polling, shutdown admission, and in-flight request recovery work.
+- A real localhost HTTP client/server round trip retrieves a completed result.
+  External market data is fake; no provider credentials are required.
+- A regression test reproduced extra token credit from out-of-order request
+  timestamps. The limiter now advances its refill clock only for later timestamps.
+
+The full uncached test suite, race suite, vet, both executable builds, and
+`git diff --check` passed. The API package reached 92.3% statement coverage.
+The concurrency/limiter/in-flight tests also passed 10 repeated race-enabled runs.
+The localhost test requires permission to bind a local port in sandboxed runners.
+
+This verifies Phase 3's local API behavior. No new authenticated provider run or
+public deployment was performed. `cmd/server` startup/signal wiring was built but
+is not covered by automated startup tests; integration coverage exercises the
+HTTP handlers over a local listener. Existing limitations remain: in-memory
+storage, no authentication, no mid-engine cancellation, no SSE or frontend yet.
+No commit or push is implied by passing the phase gate.
