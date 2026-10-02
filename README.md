@@ -452,7 +452,7 @@ curl -i http://127.0.0.1:8080/api/backtests \
 Use the returned ID to query `/api/backtests/{id}` and, after completion,
 `/api/backtests/{id}/result`. A request disconnect does not cancel an admitted job.
 Jobs and results are lost on process restart. The service uses one FRED rate as of
-the requested end date across the simulation; it does not yet model a historical
+the requested New York calendar end date across the simulation; it does not yet model a historical
 rate curve or vintage publication availability.
 
 Default protection settings:
@@ -520,3 +520,13 @@ is not covered by automated startup tests; integration coverage exercises the
 HTTP handlers over a local listener. Existing limitations remain: in-memory
 storage, no authentication, no mid-engine cancellation, no SSE or frontend yet.
 No commit or push is implied by passing the phase gate.
+
+### Phase 3 calendar-date correction
+
+The shared service interprets the run's end instant in `America/New_York` before
+querying FRED. This prevents an inclusive market end-of-day timestamp from
+selecting a following-day observation after conversion to UTC. Alpaca's UTC
+timestamp bounds remain unchanged. Direct FRED callers use the calendar date in
+the supplied time's location; existing UTC date-only callers keep their date.
+Regression tests cover API and terminal range construction in summer and winter,
+the outbound FRED date, and rejection of following-day observations.

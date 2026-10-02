@@ -145,7 +145,10 @@ result. No real provider credentials or network calls are required.
 `backtest.Service.Run` handles provider access and engine orchestration for both
 CLI and HTTP callers. `api.ServiceRunner` maps its output using metadata supplied
 by the server's provider configuration. Provider errors are sanitized. FRED is
-queried as of the requested end date; one constant rate is still used throughout.
+queried as of the requested New York calendar end date, even when its UTC
+end-of-day timestamp falls on the following date. Observations after that market
+date are rejected. Alpaca keeps the original UTC timestamp bounds. One constant
+rate is still used throughout.
 
 The job manager owns a fixed worker pool and bounded waiting channel. It retains
 immutable encoded result bytes, returns copies, and evicts only finished jobs.

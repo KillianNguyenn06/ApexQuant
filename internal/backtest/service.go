@@ -17,6 +17,8 @@ import (
 // making the engine depend on a provider, network transport, or API DTOs.
 type DataProvider interface {
 	FetchBars(context.Context, string, time.Time, time.Time, string, string) ([]marketdata.BarTick, error)
+	// FetchRiskFreeRate uses the calendar date in the supplied time's location.
+	// Service.Run supplies the requested end instant in America/New_York.
 	FetchRiskFreeRate(context.Context, string, time.Time) (float64, error)
 }
 type Credentials struct {
@@ -31,13 +33,13 @@ type ServiceSettings struct {
 func DefaultServiceSettings() ServiceSettings {
 	return ServiceSettings{
 		MonteCarlo: simulation.MonteCarlo{
-			Volatility: .20,
+			Volatility:  .20,
 			TimeHorizon: 5.0 / 252,
-			NumPaths: 100000,
-			NumSteps: 252,
-			},
+			NumPaths:    100000,
+			NumSteps:    252,
+		},
 		VolatilityWindow: 20,
-		PeriodsPerYear: 252,
+		PeriodsPerYear:   252,
 	}
 }
 
@@ -52,7 +54,7 @@ type RunOutput struct {
 }
 
 // ServiceError deliberately contains no provider error text or credentials.
-type ServiceError struct{
+type ServiceError struct {
 	Code string
 }
 
@@ -61,9 +63,10 @@ func (e *ServiceError) Error() string {
 }
 
 type Service struct {
-	provider    DataProvider
-	credentials Credentials
-	settings    ServiceSettings
+	provider       DataProvider
+	credentials    Credentials
+	settings       ServiceSettings
+	marketLocation *time.Location
 }
 
 func NewService(provider DataProvider, credentials Credentials, settings ServiceSettings) (*Service, error) {
@@ -79,11 +82,16 @@ func NewService(provider DataProvider, credentials Credentials, settings Service
 	if m.NumPaths < 1 || m.NumSteps < 1 || m.TimeHorizon <= 0 || m.Volatility < 0 || settings.VolatilityWindow < 3 || settings.PeriodsPerYear <= 0 {
 		return nil, fmt.Errorf("invalid simulation settings")
 	}
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return nil, fmt.Errorf("market timezone is unavailable: %w", err)
+	}
 	return &Service{
-		provider: provider,
-		credentials: credentials,
-		settings: settings,
-		}, nil
+		provider:       provider,
+		credentials:    credentials,
+		settings:       settings,
+		marketLocation: location,
+	}, nil
 }
 func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error) {
 	fail := func(code string) (RunOutput, error) {
@@ -112,15 +120,15 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 	}
 	c := BacktestConfig{
 		InitialAccount: account.Account{
-			Cash: request.InitialCapital,
-			Equity: request.InitialCapital,
+			Cash:        request.InitialCapital,
+			Equity:      request.InitialCapital,
 			BuyingPower: request.InitialCapital,
-			},
-		Allocations: allocations,
-		BarsBySymbol: make(map[string][]marketdata.BarTick),
-		MonteCarloInput: s.settings.MonteCarlo,
+		},
+		Allocations:      allocations,
+		BarsBySymbol:     make(map[string][]marketdata.BarTick),
+		MonteCarloInput:  s.settings.MonteCarlo,
 		VolatilityWindow: s.settings.VolatilityWindow,
-		PeriodsPerYear: s.settings.PeriodsPerYear,
+		PeriodsPerYear:   s.settings.PeriodsPerYear,
 	}
 	for _, a := range allocations {
 		bars, err := s.provider.FetchBars(ctx, a.Symbol, request.Start, request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret)
@@ -137,9 +145,10 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 		}
 		c.BarsBySymbol[a.Symbol] = bars
 	}
-	// Preserve the constant-rate model, but query as of the requested end rather
-	// than today's date when replaying an older range. Historical curves remain future work.
-	rate, err := s.provider.FetchRiskFreeRate(ctx, s.credentials.FREDKey, request.End)
+	// FRED accepts a calendar date, while Alpaca accepts UTC timestamp bounds.
+	// Select the requested US market date without changing the end instant.
+	// The constant-rate model remains; historical curves remain future work.
+	rate, err := s.provider.FetchRiskFreeRate(ctx, s.credentials.FREDKey, request.End.In(s.marketLocation))
 	if err != nil {
 		if ctx.Err() != nil {
 			return fail("canceled")
@@ -161,5 +170,5 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 	return RunOutput{
 		Config: c,
 		Result: result,
-		}, nil
+	}, nil
 }

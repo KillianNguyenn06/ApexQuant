@@ -158,10 +158,15 @@ type fredResponse struct {
 // =================================================
 // Fetch API for Risk Free Rate
 // =================================================
+// FetchRiskFreeRate uses asOf's calendar date in its supplied location.
+// Date-only UTC callers retain their date; callers with US market instants must
+// first convert them to America/New_York.
 func FetchRiskFreeRate(apiKey string, asOf time.Time) (float64, error) {
 	return NewClient().FetchRiskFreeRate(context.Background(), apiKey, asOf)
 }
 
+// FetchRiskFreeRate queries and validates against asOf's calendar date in its
+// supplied location, rather than imposing a timezone on date-only callers.
 func (c *Client) FetchRiskFreeRate(ctx context.Context, apiKey string, asOf time.Time) (float64, error) {
 	if asOf.IsZero() {
 		return 0, fmt.Errorf("as-of date is required")
@@ -178,10 +183,11 @@ func (c *Client) FetchRiskFreeRate(ctx context.Context, apiKey string, asOf time
 	}
 
 	query := endpoint.Query()
+	asOfDate := asOf.Format(time.DateOnly)
 	query.Set("series_id", "DGS3MO")
 	query.Set("api_key", apiKey)
 	query.Set("file_type", "json")
-	query.Set("observation_end", asOf.Format("2006-01-02"))
+	query.Set("observation_end", asOfDate)
 	query.Set("sort_order", "desc")
 	query.Set("limit", "10")
 	endpoint.RawQuery = query.Encode()
@@ -197,7 +203,7 @@ func (c *Client) FetchRiskFreeRate(ctx context.Context, apiKey string, asOf time
 
 	for _, observation := range payload.Observations {
 		date, err := time.Parse("2006-01-02", observation.Date)
-		if err != nil || date.Format("2006-01-02") > asOf.Format("2006-01-02") {
+		if err != nil || date.Format(time.DateOnly) > asOfDate {
 			return 0, fmt.Errorf("invalid FRED observation date")
 		}
 		if observation.Value == "." {

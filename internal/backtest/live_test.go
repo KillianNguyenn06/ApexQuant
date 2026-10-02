@@ -53,7 +53,11 @@ func TestLivePortfolioReconciliation(t *testing.T) {
 		c.BarsBySymbol[a.Symbol] = bars
 		t.Logf("%s: %d bars, %s through %s", a.Symbol, len(bars), bars[0].Timestamp.Format(time.DateOnly), bars[len(bars)-1].Timestamp.Format(time.DateOnly))
 	}
-	rate, err := client.FetchRiskFreeRate(ctx, os.Getenv("FRED_API_KEY"), end)
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate, err := client.FetchRiskFreeRate(ctx, os.Getenv("FRED_API_KEY"), end.In(location))
 	if err != nil {
 		t.Fatal(err)
 	}

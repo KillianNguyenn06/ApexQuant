@@ -78,8 +78,8 @@ func TestFRED(t *testing.T) {
 		{`{"observations":[]}`, false},
 	} {
 		c := testClient(func(r *http.Request) (int, string) {
-			if r.URL.Query().Get("series_id") != "DGS3MO" {
-				t.Fatal("wrong series")
+			if r.URL.Query().Get("series_id") != "DGS3MO" || r.URL.Query().Get("observation_end") != "2025-01-03" {
+				t.Fatal("wrong series or changed UTC date-only semantics")
 			}
 			return 200, tc.body
 		})
