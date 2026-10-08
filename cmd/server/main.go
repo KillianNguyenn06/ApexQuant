@@ -14,6 +14,7 @@ import (
 	"apexquant/internal/api"
 	"apexquant/internal/backtest"
 	"apexquant/internal/marketdata"
+	"apexquant/web"
 )
 
 func main() {
@@ -43,9 +44,9 @@ func main() {
 	flag.IntVar(&settings.MonteCarlo.NumSteps, "steps", settings.MonteCarlo.NumSteps, "Monte Carlo steps per path")
 	flag.Int64Var(&settings.MonteCarlo.Seed, "seed", settings.MonteCarlo.Seed, "simulation seed (zero is randomized)")
 	flag.Parse()
-	credentials := backtest.Credentials{AlpacaKey: os.Getenv("APCA_API_KEY_ID"), AlpacaSecret: os.Getenv("APCA_API_SECRET_KEY"), FREDKey: os.Getenv("FRED_API_KEY")}
+	credentials := backtest.Credentials{AlpacaKey: os.Getenv("ALPACA_API_KEY"), AlpacaSecret: os.Getenv("ALPACA_API_SECRET"), FREDKey: os.Getenv("FRED_API_KEY")}
 	if credentials.AlpacaKey == "" || credentials.AlpacaSecret == "" || credentials.FREDKey == "" {
-		log.Fatal("Export APCA_API_KEY_ID, APCA_API_SECRET_KEY, and FRED_API_KEY before starting the server.")
+		log.Fatal("Export ALPACA_API_KEY, ALPACA_API_SECRET, and FRED_API_KEY before starting the server.")
 	}
 	service, err := backtest.NewService(marketdata.NewClient(), credentials, settings)
 	if err != nil {
@@ -65,7 +66,7 @@ func main() {
 	}
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           handler,
+		Handler:           web.Handler(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -26,8 +26,8 @@ type HandlerOptions struct {
 func DefaultHandlerOptions() HandlerOptions {
 	return HandlerOptions{
 		MaxBodyBytes:         16 << 10,
-		MaxRangeDays:         366,
-		MaxSnapshots:         8 * 366,
+		MaxRangeDays:         3660,
+		MaxSnapshots:         MaxSymbols * 3660,
 		MaxInFlight:          16,
 		RequestsPerMinute:    120,
 		RequestBurst:         30,
@@ -118,6 +118,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-h.inflight }()
 	default:
 		writeError(w, 503, "server_busy", "Too many simultaneous requests.")
+		return
+	}
+	if r.URL.Path == "/api/config" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, 405, "method_not_allowed", "Use GET for this endpoint.")
+			return
+		}
+		h.dashboardConfig(w)
 		return
 	}
 	if r.URL.Path == "/api/backtests" {

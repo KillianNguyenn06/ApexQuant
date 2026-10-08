@@ -46,7 +46,7 @@ func TestLivePortfolioReconciliation(t *testing.T) {
 		PeriodsPerYear:   252,
 	}
 	for _, a := range c.Allocations {
-		bars, err := client.FetchBars(ctx, a.Symbol, start, end, os.Getenv("APCA_API_KEY_ID"), os.Getenv("APCA_API_SECRET_KEY"))
+		bars, err := client.FetchBars(ctx, a.Symbol, start, end, os.Getenv("ALPACA_API_KEY"), os.Getenv("ALPACA_API_SECRET"))
 		if err != nil {
 			t.Fatal(err)
 		}

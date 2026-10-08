@@ -1,4 +1,4 @@
-# Phase 4 historical replay contract
+# Historical replay contract
 
 Task 1 implements the replay timeline and JSON payloads in
 `internal/api/replay.go`. Task 2 adds bounded SSE transport in `internal/api/sse.go`.
@@ -155,14 +155,14 @@ of running an unbounded stream.
 | Setting | Default | Server flag |
 | --- | --- | --- |
 | Concurrent replay streams, including preparation | 2 | `-replay-connections` |
-| Serialized source bytes and encoded timeline bytes, each per stream | 32 MiB | `-replay-max-bytes` |
+| Serialized source bytes and encoded timeline bytes, each per stream | 128 MiB | `-replay-max-bytes` |
 | Write plus flush deadline per event | 5 seconds | `-replay-write-timeout` |
 | Lifetime per connection, including preparation | 3 hours | `-replay-max-duration` |
 
 Each connection receives a fresh lifetime beginning with replay admission. It is
 not a timer for the application session or the underlying calculation. Default
 stored-result retention is also three hours, measured from job completion, with
-the existing 20-record/64-MiB budgets still permitting earlier eviction. Starting
+the existing 20-record/256-MiB stored-result budgets still permitting earlier eviction. Starting
 another replay does not extend that stored-result deadline. An admitted stream
 can continue after eviction, but a later reconnect cannot recover an evicted job.
 
@@ -189,10 +189,103 @@ write taking up to its write timeout to return.
 There is no separate heartbeat timer: at the slowest supported speed, deliberate
 idle gaps are at most four seconds. Start/data frames provide activity, and blocked
 writes fail on the deadline. This endpoint is for local single-user replay;
-proxy/deployment behavior and a browser dashboard are not verified by these tests.
+proxy/deployment behavior is not verified by these transport tests.
 
 Phase-wide verification additionally checks HTTP/1.1 and HTTP/2 delivery,
 independent reconstruction of cash and equity from streamed fills and positions,
 equity changes during Hold, full-history zero-volume mapping, concurrent admission
 and recovery while polling remains available, and separate three-hour connection
-and result-retention behavior. The learning recap follows verification.
+and result-retention behavior.
+
+## Browser dashboard
+
+The dashboard fetches the completed JSON result, then reads SSE with streaming
+`fetch`. It validates consecutive IDs and incoming values against that result.
+Only a complete daily group commits to displayed history: all stock candles and
+the portfolio equity point refer to the same closing day. Every Hold snapshot
+remains present. Null indicators break a line; numeric zero remains available.
+Buy/Sell markers use filled orders and their execution prices, not submitted
+orders or signal opportunities.
+
+Pause closes the connection and discards a partial day. Resume sends
+`Last-Event-ID` for the last committed portfolio event (or start), retrying the
+whole incomplete day. Speed changes use the same mechanism with a new speed.
+EOF without `complete`, invalid data, and HTTP errors show an interruption rather
+than successful completion. The client has a 20-second inactivity deadline and
+a 1 MiB decoded-character limit per event; these are separate from the server's
+three-hour connection lifetime.
+
+Previous/next day, seeking and restart reuse already received frames locally.
+Seeking cannot expose days that have not arrived. Restart replays that cache,
+then resumes the stream if more days remain. A fully received replay needs no
+new connection or engine run. Reloading the page loses this browser cache.
+An expired job prevents fetching more days; received history is still usable.
+
+The price chart displays a recent window of up to 80 trading days, adjusted for
+screen width. Rewinding changes this window. Equity includes every displayed day.
+Final result figures remain explicitly labeled separately from the day's equity.
+Browser module tests cover chunked SSE framing, exact ordering, partial-day
+rollback, resume, single-step cancellation, Hold updates, markers and indicators.
+Local browser checks use synthetic prices through the real HTTP/replay handlers;
+they do not establish provider connectivity or deployment compatibility.
+
+### Account, orders and historical activity
+
+Dashboard account/position data comes from the same committed frame as the
+charts. Market value is quantity times closing price. Actual allocation is market
+value divided by daily equity (unavailable when equity is nonpositive). Unrealized
+P&L is quantity times (closing price minus entry price) for an open position; it
+is unavailable for a flat position. Return since start uses initial capital and
+closing equity, not an invented daily gain.
+
+The order table folds recorded submissions and fills by order ID through the
+displayed frame. A later fill replaces that order's submitted status and quantity
+with the actual recorded fill. The original creation date is distinct from the
+fill's observed bar date. Missing fill prices stay unavailable. Submitted status
+means the last recorded observation, not confirmation of a currently pending
+order: the engine does not retain cancellation/rejection events.
+
+The historical activity table retains every bar and its signal, plus recorded
+fills and submissions, in reverse daily/allocation timeline order. It does not
+sort by intraday timestamps or invent exchange-level event times. The two
+histories paginate at 20 rows; changing the displayed day returns to page one.
+Rewinding rebuilds only the displayed prefix, so future fills disappear and an
+earlier submitted status is restored. Resetting for another run clears all views.
+
+Run configuration displays an explicit metadata allowlist from the completed
+result. Form changes for a future run cannot alter it. Seed zero is labeled
+randomized with its realized seed unrecorded; unavailable rate observation dates
+stay unavailable. This disclosure is not durable saved history.
+
+Phase 5 verification includes independently checked cash/holdings reconciliation,
+submitted-to-filled state, no future activity on rewind, Hold updates, pagination,
+configuration allowlisting, failed calculation recovery and a second run. Browser
+checks use the real job, result and replay endpoints with synthetic engine inputs.
+Live provider availability, installers and production deployment remain outside
+these checks. Existing backend race tests and frontend regression tests remain.
+
+### Smooth chart motion
+
+At ordinary playback speeds, the chart camera interpolates its horizontal index
+range and vertical axis range using animation frames and smoothstep easing.
+Candle OHLC values, indicator samples, fill prices, equity values and source dates
+remain constant. Only their screen coordinates move. The scene creates SVG nodes
+once per displayed day and updates their geometry per animation frame. The plot
+clips outgoing bars during a rolling-window pan. Null indicator gaps remain gaps.
+
+Duration is `min(600 ms, 1000 ms / speed)`, at most the daily playback interval.
+At 5, 10 and 20 days/sec, linear motion fills the interval to avoid repeatedly
+braking and accelerating between bars. Slower transitions use smoothstep easing.
+There is at most one scheduled frame per chart. A newer day cancels the previous
+transition and starts from the current camera; stale callbacks cannot repaint.
+Pause, interruption, stepping, seeking, stock changes and resizing settle to the
+exact selected frame. New runs/page exit cancel and clear prior motion. Completion
+allows the final transition to finish, without requesting another replay.
+
+The Smooth chart motion checkbox controls visual transitions separately from
+replay speed. Reduced-motion preference disables them regardless of the checkbox.
+Neither preference changes recorded values, skips Hold days, or changes SSE
+pacing. Tests use a controlled animation clock to verify cancellation, one-frame
+scheduling, exact settlement and interrupted transitions. Browser checks observe
+changing candle coordinates with unchanged day/price/equity at 1 day/sec, immediate
+pause/opt-out settlement, rolling-window clipping and faster long-history replay.

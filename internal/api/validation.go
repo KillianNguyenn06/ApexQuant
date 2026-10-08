@@ -15,6 +15,9 @@ import (
 // PercentTotalTolerance matches the engine's 0.000001 fractional tolerance.
 const PercentTotalTolerance = 0.0001
 
+const EarliestStartDate = "2017-01-01"
+const MaxSymbols = 8
+
 var tickerPattern = regexp.MustCompile(`^[A-Z][A-Z0-9.-]{0,9}$`)
 
 type ValidatedRequest struct {
@@ -32,14 +35,14 @@ func DecodeCreateBacktestRequest(reader io.Reader) (CreateBacktestRequest, error
 	var request *CreateBacktestRequest
 	if err := decoder.Decode(&request); err != nil || request == nil {
 		return CreateBacktestRequest{}, &APIError{
-			Code: "invalid_json",
+			Code:    "invalid_json",
 			Message: "Expected a backtest JSON object with recognized fields.",
 		}
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return CreateBacktestRequest{}, &APIError{
-			Code: "invalid_json",
+			Code:    "invalid_json",
 			Message: "Expected exactly one JSON object.",
 		}
 	}
@@ -52,15 +55,15 @@ func DecodeCreateBacktestRequest(reader io.Reader) (CreateBacktestRequest, error
 func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time) (ValidatedRequest, error) {
 	invalid := func(code, message, field string) (ValidatedRequest, error) {
 		return ValidatedRequest{}, &APIError{
-			Code: code,
+			Code:    code,
 			Message: message,
-			Field: field,
+			Field:   field,
 		}
 	}
 	if !finite(request.InitialCapital) || request.InitialCapital <= 0 {
 		return invalid("invalid_capital", "Initial capital must be finite and greater than zero.", "initial_capital")
 	}
-	if len(request.Allocations) < 1 || len(request.Allocations) > 8 {
+	if len(request.Allocations) < 1 || len(request.Allocations) > MaxSymbols {
 		return invalid("invalid_allocations", "Select between 1 and 8 symbols.", "allocations")
 	}
 	normalized := request
@@ -82,7 +85,7 @@ func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time)
 		}
 		total += a.Percent
 		normalized.Allocations[i] = Allocation{
-			Symbol: symbol,
+			Symbol:  symbol,
 			Percent: a.Percent,
 		}
 		allocations[i] = session.PortfolioAllocation{
@@ -101,6 +104,9 @@ func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time)
 	if err != nil {
 		return invalid("invalid_dates", "Use a valid YYYY-MM-DD start date.", "start_date")
 	}
+	if start.Format(time.DateOnly) < EarliestStartDate {
+		return invalid("invalid_dates", "Start date must be on or after January 1, 2017.", "start_date")
+	}
 	last, err := time.ParseInLocation(time.DateOnly, request.EndDate, location)
 	if err != nil {
 		return invalid("invalid_dates", "Use a valid YYYY-MM-DD end date.", "end_date")
@@ -114,11 +120,11 @@ func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time)
 		return invalid("invalid_dates", "End date must be a completed US market day outside the latest 15 minutes.", "end_date")
 	}
 	return ValidatedRequest{
-		Request: normalized,
+		Request:     normalized,
 		Allocations: allocations,
-		Start: start.UTC(),
-		End: end.UTC(),
-		}, nil
+		Start:       start.UTC(),
+		End:         end.UTC(),
+	}, nil
 }
 func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)

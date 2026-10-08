@@ -89,6 +89,8 @@ func TestHTTPValidationAndLimits(t *testing.T) {
 	h, _ := httpTestHandler(t, func(context.Context, string, ValidatedRequest) (BacktestResultResponse, error) {
 		return BacktestResultResponse{}, nil
 	})
+	// A custom one-year ceiling must remain enforceable with wider defaults.
+	h.options.MaxRangeDays = 366
 	for _, tc := range []struct {
 		method, path, body, media string
 		status                    int

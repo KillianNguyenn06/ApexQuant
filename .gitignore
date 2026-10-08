@@ -2,6 +2,11 @@
 
 # Keep environment variables private
 .env
+.env.*
+!.env.example
+!.env.template
 
 # Local session handoff; not project documentation for publication.
-docs/project-handoff-2026-10-01.md
+docs/project-handoff*.md
+docs/private/
+docs/local/

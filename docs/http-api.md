@@ -3,7 +3,22 @@
 Task 1 defines the contract; Task 2 implements HTTP routes and bounded job
 execution. The engine remains independent of the API package.
 
+## Dashboard input limits
+
+`GET /api/config` returns public form limits: `earliest_start_date`,
+`latest_end_date`, `max_range_days`, `max_snapshots`, `max_symbols`,
+`percent_total_tolerance`, and `market_timezone`. The latest end date is the
+previous completed New York calendar day, allowing for the provider's 15-minute
+delay. Limits reflect this server's configuration, rather than browser defaults.
+Responses are not cached and contain no provider credentials. This read-only
+endpoint shares ordinary request rate and concurrency limits.
+
 ## Create
+
+Start dates must be on or after January 1, 2017, subject to the selected symbols'
+available market history. The default maximum range is 3,660 calendar days
+(roughly ten years), with a 29,280 calendar-days-times-symbols workload budget.
+The dashboard reads both limits from the server; smaller flag overrides still apply.
 
 `POST /api/backtests`, with `Content-Type: application/json`:
 

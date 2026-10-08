@@ -32,7 +32,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	service, err := backtest.NewService(marketdata.NewClient(), backtest.Credentials{AlpacaKey: os.Getenv("APCA_API_KEY_ID"), AlpacaSecret: os.Getenv("APCA_API_SECRET_KEY"), FREDKey: os.Getenv("FRED_API_KEY")}, backtest.DefaultServiceSettings())
+	service, err := backtest.NewService(marketdata.NewClient(), backtest.Credentials{AlpacaKey: os.Getenv("ALPACA_API_KEY"), AlpacaSecret: os.Getenv("ALPACA_API_SECRET"), FREDKey: os.Getenv("FRED_API_KEY")}, backtest.DefaultServiceSettings())
 	if err != nil {
 		log.Fatal(err)
 	}

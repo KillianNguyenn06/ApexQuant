@@ -147,16 +147,16 @@ ApexQuant/
 ApexQuant expects these environment variables:
 
 ```text
-APCA_API_KEY_ID
-APCA_API_SECRET_KEY
+ALPACA_API_KEY
+ALPACA_API_SECRET
 FRED_API_KEY
 ```
 
 Example:
 
 ```bash
-export APCA_API_KEY_ID="your-alpaca-key"
-export APCA_API_SECRET_KEY="your-alpaca-secret"
+export ALPACA_API_KEY="your-alpaca-key"
+export ALPACA_API_SECRET="your-alpaca-secret"
 export FRED_API_KEY="your-fred-key"
 ```
 
@@ -304,7 +304,9 @@ Current phase:
 Phase 3 complete: HTTP contract, reusable service, bounded background jobs,
 and API integration/concurrency verification.
 Phase 4 complete: replay timeline, bounded SSE transport, and phase-wide verification.
-Phase 5 preparation: historical volatility warmup implemented; dashboard pending.
+Phase 5 complete: local dashboard, portfolio/settings form, input validation,
+backtest status tracking, animated charts, replay controls, daily account/position
+views, order history, historical activity, run configuration and dashboard verification.
 ```
 
 ## Roadmap
@@ -346,6 +348,70 @@ event IDs, disconnect handling and separate stream limits.
 - Portfolio-equity chart.
 - Position and order tables.
 
+The dashboard is in `web/assets` and embedded in the Go server executable.
+Open `http://127.0.0.1:8080/` after starting `go run ./cmd/server` with the existing
+provider environment variables. End users do not need a Node.js server or a
+separate frontend build. The interface uses a dark theme with teal, gold and coral neon
+accents and adapts to narrow screens.
+
+The Run Builder is inside Backtest Settings. The right-side portfolio panel shows
+the displayed day's equity, cash, buying power and open positions, with four stock
+cards per page. Selecting a card switches the price chart. The equity header shows
+value and return relative to starting capital; hover over the equity chart or use
+its arrow keys to inspect each displayed day. Chart lines use a soft neon glow. At 5, 10 and 20 days/sec, the chart camera
+pans steadily across the full day interval rather than stopping between bars.
+
+The portfolio form and settings dialog validate allocations, capital, completed dates,
+and current server limits from `GET /api/config`. Job tracking distinguishes
+queued/running/completed/failed states, retrieves a completed result, and can
+resume interrupted polling without submitting another backtest. It does not
+invent computation progress or automatically retry uncertain submissions.
+Settings offer starting capital, date presets and custom dates; automatic
+volatility is described, but manual volatility overrides remain unimplemented.
+The completed run automatically starts a historical SSE replay. Price candles,
+VWAP/bands, filled Buy/Sell markers and portfolio equity advance together only
+after every stock's snapshot for a day has arrived. Hold days are retained.
+Pause/resume, previous/next day, restart, received-history seeking and playback
+speed controls are available. The price chart shows a recent window suited to
+the screen; equity retains all displayed days. Replay does not rerun the engine.
+Smooth chart motion eases scrolling and axis rescaling at the selected playback
+speed, without interpolating market prices or account values. Transitions last up
+to 600 ms and shorten at faster playback speeds. Pause, stepping, seeking, stock
+changes and resizing settle immediately. The checkbox can disable motion, and
+the operating system's reduced-motion preference is always respected.
+Account cards and position tables follow the displayed replay day. Positions show
+shares, entry/closing prices, market value, unrealized P&L, requested versus actual
+allocation, and stop/take-profit levels. Flat positions retain zero holdings value
+and unavailable entry/exit levels. Return since start uses equity versus starting
+capital; unrealized P&L describes open positions only.
+
+Orders are deduplicated by ID and show their last observed status through that
+day, submission date, fill date and execution price. Cancellations/rejections are
+not retained by the engine and cannot be inferred from a missing fill. Historical
+activity includes every bar, including Hold, plus recorded fills and submissions.
+Both histories paginate at 20 rows and rewind with the charts; future activity
+is not shown early. The configuration disclosure shows the completed run's
+request, model settings and data metadata independently of edits for a new run.
+It contains no credentials and does not save the run to disk. Chart areas contain
+no illustrative market or profit data before a run.
+
+Development checks for these modules use Node.js (no third-party packages):
+
+```sh
+cd web
+npm test
+```
+
+Phase 5 browser checks exercise allocation/capital validation, applied settings,
+keyboard dismissal, narrow-screen layout, submission/completion/failure, rewind,
+next-open fills, position/account agreement, configuration isolation, pagination,
+multiple runs and smooth camera motion, including fast playback at 5, 10 and
+20 days/sec. Synthetic inputs
+pass through the real engine/job/result/replay handlers. Module tests also cover
+interrupted tracking, duplicate submission prevention, request timeouts, backend
+limit agreement, motion cancellation and exact camera settlement. No live
+provider run was required for these UI checks.
+
 #### Historical volatility preparation
 
 Before trading starts, the shared service fetches earlier daily prices to prepare
@@ -364,8 +430,8 @@ or bands, or appear in result snapshots or replay events. If fewer than three
 total bars are available, the configured fallback volatility (20% by default)
 still applies until an estimate can be calculated. `initial_volatility` in API
 settings continues to describe that fallback, not each stock's rolling estimate.
-Simulation count remains a backend setting; the settings panel and manual
-volatility override have not yet been implemented. Regression tests check the
+Simulation count remains a backend setting; dashboard controls for simulation
+count and manual volatility overrides have not yet been implemented. Regression tests check the
 first-day estimate against an independent calculation, rolling-window behavior,
 isolation between symbols, exclusion of future prices, and separation of
 preparation data from trading and replay data.
@@ -387,10 +453,10 @@ preparation data from trading and replay data.
 - Split and dividend adjustments.
 - Trading fees and slippage.
 - Saved backtest results.
-- Add pre-run settings for backtest length: presets and custom start/end dates.
-  Set January 1, 2017 as the earliest selectable start date, subject to each
-  symbol's actual data availability. Expand and verify the current 366-day
-  range limit and related snapshot/result budgets before enabling longer runs.
+- Expand date presets and verify longer runs against live provider history.
+  January 1, 2017 is the earliest accepted start date, subject to each
+  symbol's actual data availability. Custom dates support up to 3,660 calendar
+  days by default; longer histories require more calculation time and memory.
 - Optional real-time market-data support.
 - Move the main GBM/Monte Carlo calculation core from Go to C++ in a later
   implementation phase to optimize calculation speed. Keep Go orchestration and
@@ -409,7 +475,8 @@ preparation data from trading and replay data.
 - Trading fees and slippage are not yet included.
 - Backtest results are not yet persisted.
 - The SSE stream replays completed results; it does not show live calculation progress.
-- The frontend is not yet implemented.
+- Saved-run history, names/notes and durable storage are not yet implemented.
+- Replay data advances by complete trading days; visual smoothing does not provide intraday prices.
 
 ## Disclaimer
 
@@ -440,8 +507,8 @@ and equity were $49,702.00601245. Every timestamp's accounting was reconstructed
 independently from fills and closing prices. JSON encoding passed.
 
 Ordinary tests use fake HTTP transports and require no secrets or network.
-To repeat the optional provider/portfolio test, first export `APCA_API_KEY_ID`,
-`APCA_API_SECRET_KEY`, and `FRED_API_KEY` securely in your execution environment:
+To repeat the optional provider/portfolio test, first export `ALPACA_API_KEY`,
+`ALPACA_API_SECRET`, and `FRED_API_KEY` securely in your execution environment:
 
 ```sh
 APEXQUANT_LIVE_TEST=1 go test ./internal/backtest -run '^TestLivePortfolioReconciliation$' -count=1 -v -timeout 10m
@@ -500,12 +567,12 @@ Default protection settings:
 | Running jobs / waiting queue | 1 / 4 |
 | Request body / headers | 16 KiB / 16 KiB |
 | Simultaneous HTTP handlers | 16 |
-| Requested range | 366 calendar days |
-| Estimated snapshots | 2,928 (calendar days times symbols) |
+| Requested range | 3,660 calendar days (roughly ten years) |
+| Estimated snapshots | 29,280 (calendar days times symbols) |
 | Shared request bucket | 120/minute refill, burst 30 |
 | Shared submission bucket | 6/minute refill, burst 2 |
 | Finished records / retention | 20 / 3 hours after completion |
-| Serialized result / all stored results | 16 MiB / 64 MiB |
+| Serialized result / all stored results | 64 MiB / 256 MiB |
 
 Rate limits are shared across local clients, including failed requests. Status
 polling once per second fits the normal request budget. Exhaustion returns 429;
@@ -582,7 +649,7 @@ Replace `{id}` with the returned job ID. Speed is historical days per second
 one portfolio update per day, then Complete. Reconnect with `Last-Event-ID` to
 continue after the last received event while the job is still retained.
 
-Defaults allow two replay connections with 32 MiB each for serialized source and
+Defaults allow two replay connections with 128 MiB each for serialized source and
 timeline budgets, a five-second deadline per write/flush, and a three-hour lifetime
 per connection. Result retention is three hours after job completion, subject to
 earlier count/byte eviction; starting a replay does not renew that retention timer.

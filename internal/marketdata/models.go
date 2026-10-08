@@ -65,9 +65,9 @@ func (c *Client) FetchBars(ctx context.Context, symbol string, start, end time.T
 	}
 
 	if apiKey == "" {
-		return nil, fmt.Errorf("\n\tError: APCA_API_KEY_ID is empty\n")
+		return nil, fmt.Errorf("\n\tError: ALPACA_API_KEY is empty\n")
 	} else if apiSecret == "" {
-		return nil, fmt.Errorf("\n\tError: APCA_API_SECRET_KEY is empty\n")
+		return nil, fmt.Errorf("\n\tError: ALPACA_API_SECRET is empty\n")
 	}
 
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))

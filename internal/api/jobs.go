@@ -31,8 +31,8 @@ func DefaultJobOptions() JobOptions {
 		QueueSize:      4,
 		MaxRetained:    20,
 		Retention:      3 * time.Hour,
-		MaxResultBytes: 16 << 20,
-		MaxStoredBytes: 64 << 20,
+		MaxResultBytes: 64 << 20,
+		MaxStoredBytes: 256 << 20,
 	}
 }
 

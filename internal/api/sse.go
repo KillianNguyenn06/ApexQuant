@@ -21,7 +21,7 @@ type ReplayOptions struct {
 func DefaultReplayOptions() ReplayOptions {
 	return ReplayOptions{
 		MaxConnections: 2,
-		MaxBytes:       32 << 20,
+		MaxBytes:       128 << 20,
 		WriteTimeout:   5 * time.Second,
 		MaxDuration:    3 * time.Hour,
 	}
