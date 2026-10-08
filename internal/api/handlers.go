@@ -20,6 +20,7 @@ type HandlerOptions struct {
 	MaxBodyBytes                                                           int64
 	MaxRangeDays, MaxSnapshots, MaxInFlight                                int
 	RequestsPerMinute, RequestBurst, SubmissionsPerMinute, SubmissionBurst int
+	Replay                                                                 ReplayOptions
 }
 
 func DefaultHandlerOptions() HandlerOptions {
@@ -32,6 +33,7 @@ func DefaultHandlerOptions() HandlerOptions {
 		RequestBurst:         30,
 		SubmissionsPerMinute: 6,
 		SubmissionBurst:      2,
+		Replay:               DefaultReplayOptions(),
 	}
 }
 
@@ -72,10 +74,12 @@ type Handler struct {
 	options               HandlerOptions
 	requests, submissions *bucket
 	inflight              chan struct{}
+	replays               chan struct{}
+	waitReplay            func(context.Context, time.Duration) error
 }
 
 func NewHandler(jobs *JobManager, options HandlerOptions) (*Handler, error) {
-	if jobs == nil || options.MaxBodyBytes < 1 || options.MaxBodyBytes > 1<<30 || options.MaxRangeDays < 2 || options.MaxSnapshots < 2 || options.MaxInFlight < 1 || options.RequestsPerMinute < 1 || options.RequestBurst < 1 || options.SubmissionsPerMinute < 1 || options.SubmissionBurst < 1 {
+	if jobs == nil || options.MaxBodyBytes < 1 || options.MaxBodyBytes > 1<<30 || options.MaxRangeDays < 2 || options.MaxSnapshots < 2 || options.MaxInFlight < 1 || options.RequestsPerMinute < 1 || options.RequestBurst < 1 || options.SubmissionsPerMinute < 1 || options.SubmissionBurst < 1 || !options.Replay.valid() {
 		return nil, fmt.Errorf("invalid HTTP limits")
 	}
 	return &Handler{
@@ -83,7 +87,9 @@ func NewHandler(jobs *JobManager, options HandlerOptions) (*Handler, error) {
 		options:     options,
 		requests:    newBucket(options.RequestsPerMinute, options.RequestBurst),
 		submissions: newBucket(options.SubmissionsPerMinute, options.SubmissionBurst),
-		inflight:    make(chan struct{}, options.MaxInFlight)}, nil
+		inflight:    make(chan struct{}, options.MaxInFlight),
+		replays:     make(chan struct{}, options.Replay.MaxConnections),
+		waitReplay:  waitReplayDay}, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -92,6 +98,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, 429, "rate_limited", "Request rate limit exceeded.")
 		return
+	}
+	// Replay has its own admission budget; long streams do not occupy polling or submission slots.
+	// Connection attempts still use the request rate limit.
+	if strings.HasPrefix(r.URL.Path, "/api/backtests/") {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/backtests/"), "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "replay" {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", "GET")
+				writeError(w, 405, "method_not_allowed", "Use GET for this endpoint.")
+				return
+			}
+			h.replay(w, r, parts[0])
+			return
+		}
 	}
 	select {
 	case h.inflight <- struct{}{}:

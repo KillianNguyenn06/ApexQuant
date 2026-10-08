@@ -303,7 +303,8 @@ Current phase:
 ```text
 Phase 3 complete: HTTP contract, reusable service, bounded background jobs,
 and API integration/concurrency verification.
-Next: Phase 4 — SSE historical replay.
+Phase 4: replay timeline and bounded SSE transport implemented (Tasks 1–2).
+Task 3 verification passed; the phase-wide learning review remains.
 ```
 
 ## Roadmap
@@ -332,6 +333,10 @@ Next: Phase 4 — SSE historical replay.
 - Preserve chronological event ordering.
 - Handle client disconnects and completion events.
 
+Tasks 1–2 add the [replay contract and SSE transport](docs/replay.md), with
+deterministic event ordering, daily portfolio updates, playback speed, resumable
+event IDs, disconnect handling and separate stream limits.
+
 ### Phase 5 — Frontend Dashboard
 
 - Portfolio-allocation form.
@@ -358,7 +363,15 @@ Next: Phase 4 — SSE historical replay.
 - Split and dividend adjustments.
 - Trading fees and slippage.
 - Saved backtest results.
+- Add pre-run settings for backtest length: presets and custom start/end dates.
+  Set January 1, 2017 as the earliest selectable start date, subject to each
+  symbol's actual data availability. Expand and verify the current 366-day
+  range limit and related snapshot/result budgets before enabling longer runs.
 - Optional real-time market-data support.
+- Move the main GBM/Monte Carlo calculation core from Go to C++ in a later
+  implementation phase to optimize calculation speed. Keep Go orchestration and
+  verify numerical correctness, reproducibility, and measured performance against
+  the Go implementation before replacing the core.
 
 ## Known Limitations
 
@@ -371,7 +384,8 @@ Next: Phase 4 — SSE historical replay.
 - Seed 0 uses time-based randomness; nonzero seeds support repeatable simulations.
 - Trading fees and slippage are not yet included.
 - Backtest results are not yet persisted.
-- The frontend and SSE stream are not yet implemented.
+- The SSE stream replays completed results; it does not show live calculation progress.
+- The frontend is not yet implemented.
 
 ## Disclaimer
 
@@ -466,7 +480,7 @@ Default protection settings:
 | Estimated snapshots | 2,928 (calendar days times symbols) |
 | Shared request bucket | 120/minute refill, burst 30 |
 | Shared submission bucket | 6/minute refill, burst 2 |
-| Finished records / retention | 20 / 30 minutes |
+| Finished records / retention | 20 / 3 hours after completion |
 | Serialized result / all stored results | 16 MiB / 64 MiB |
 
 Rate limits are shared across local clients, including failed requests. Status
@@ -517,7 +531,7 @@ The localhost test requires permission to bind a local port in sandboxed runners
 This verifies Phase 3's local API behavior. No new authenticated provider run or
 public deployment was performed. `cmd/server` startup/signal wiring was built but
 is not covered by automated startup tests; integration coverage exercises the
-HTTP handlers over a local listener. Existing limitations remain: in-memory
+HTTP handlers over a local listener. Limitations at Phase 3 completion included: in-memory
 storage, no authentication, no mid-engine cancellation, no SSE or frontend yet.
 No commit or push is implied by passing the phase gate.
 
@@ -530,3 +544,37 @@ timestamp bounds remain unchanged. Direct FRED callers use the calendar date in
 the supplied time's location; existing UTC date-only callers keep their date.
 Regression tests cover API and terminal range construction in summer and winter,
 the outbound FRED date, and rejection of following-day observations.
+
+### Phase 4 replay transport
+
+After a job completes, stream its cached result with:
+
+```sh
+curl -N 'http://127.0.0.1:8080/api/backtests/{id}/replay?speed=1'
+```
+
+Replace `{id}` with the returned job ID. Speed is historical days per second
+(0.25–20, default 1). A replay includes Start, every stock snapshot including Hold,
+one portfolio update per day, then Complete. Reconnect with `Last-Event-ID` to
+continue after the last received event while the job is still retained.
+
+Defaults allow two replay connections with 32 MiB each for serialized source and
+timeline budgets, a five-second deadline per write/flush, and a three-hour lifetime
+per connection. Result retention is three hours after job completion, subject to
+earlier count/byte eviction; starting a replay does not renew that retention timer.
+These streams use separate capacity from ordinary requests. They do not rerun the
+engine, pin expired jobs, or silently skip bars. See the
+[replay contract](docs/replay.md) for error, completion and timeout semantics.
+
+Task 2 verification uses fake providers and real localhost HTTP/TCP tests for
+ordered delivery, resume, disconnect cleanup, slow-reader deadlines and playback
+across a short server write timeout.
+
+Task 3 verification passed on 2026-10-06. End-to-end tests cover HTTP/1.1 and
+HTTP/2 delivery, independently checked event order, filled-order accounting,
+changing portfolio values on Hold days, unavailable versus zero indicator values,
+concurrent stream admission and capacity recovery, and fresh connection deadlines.
+The three-hour lifetime and retention checks use controlled timestamps rather
+than waiting three hours. The full race suite passed with 93.4% API statement
+coverage; static analysis and both server and CLI builds also passed. The
+phase-wide learning review remains before closing Phase 4.

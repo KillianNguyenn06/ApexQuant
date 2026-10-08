@@ -2,3 +2,6 @@
 
 # Keep environment variables private
 .env
+
+# Local session handoff; not project documentation for publication.
+docs/project-handoff-2026-10-01.md

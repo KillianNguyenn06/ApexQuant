@@ -19,7 +19,9 @@ import (
 	"apexquant/internal/marketdata"
 )
 
-type tradingProvider struct{ failure string }
+type tradingProvider struct{
+	failure string
+}
 
 func (p tradingProvider) FetchBars(ctx context.Context, symbol string, start, end time.Time, key, secret string) ([]marketdata.BarTick, error) {
 	if p.failure == "bars" {

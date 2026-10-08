@@ -1,4 +1,4 @@
-# Backtest API contract — Phase 3
+# Backtest API contract
 
 Task 1 defines the contract; Task 2 implements HTTP routes and bounded job
 execution. The engine remains independent of the API package.
@@ -58,7 +58,9 @@ This confirms admission, not successful market-data fetching or computation.
 Job states: queued -> running -> completed or failed. No percentage is promised.
 A failed job returns the same shape with status `failed` and a populated safe
 error. Server restart clears the in-memory jobs. Finished jobs expire after
-30 minutes by default, or earlier when record/byte budgets require eviction.
+three hours after completion by default, or earlier when record/byte budgets
+require eviction. This retention timer is independent of each replay connection's
+lifetime; starting or reconnecting a replay does not renew stored-job retention.
 
 ## Result
 
@@ -69,7 +71,7 @@ error. Server restart clears the in-memory jobs. Finished jobs expire after
 - `final_account`: `cash`, `equity`, `buying_power`.
 - `final_positions`: positions keyed by canonical symbol.
 - `snapshots`: the full engine sequence, chronological with allocation order
-  within each timestamp. Each symbol snapshot retains the shared account values.
+  within each aligned UTC calendar date. Each symbol snapshot retains the shared account values.
 
 Snapshot fields: `timestamp`, `bar`, `indicator`, `signal`, `position`, `account`,
 `submitted_order`, `filled_order`. Timestamps serialize in UTC RFC3339 format.
@@ -98,6 +100,10 @@ history before any later pagination/replay, because cumulative availability
 cannot be inferred from an isolated slice.
 
 ## Errors
+
+For `GET /api/backtests/{id}/replay`, event payloads, pacing, resume semantics,
+and stream limits are documented in the [historical replay contract](replay.md).
+Only completed retained jobs can start an SSE replay.
 
 ```json
 {
@@ -164,5 +170,6 @@ This protection does not replace future Monte Carlo performance/cancellation wor
 
 Phase 3 Tasks 1–3 are implemented and locally verified. Final tests cover a
 trading result against a direct engine run, provider failures, concurrent requests,
-expiry, shutdown, overload recovery, and a localhost HTTP round trip. SSE and the
-frontend belong to later phases. See the README for validation evidence and limits.
+expiry, shutdown, overload recovery, and a localhost HTTP round trip. Phase 4
+adds SSE replay; the frontend remains Phase 5. See the README for validation
+evidence and limits.

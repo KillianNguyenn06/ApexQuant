@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrCapacity = errors.New("job capacity unavailable")
-	ErrNotFound = errors.New("job not found")
-	ErrNotReady = errors.New("result not ready")
+	ErrCapacity       = errors.New("job capacity unavailable")
+	ErrNotFound       = errors.New("job not found")
+	ErrNotReady       = errors.New("result not ready")
+	ErrResultTooLarge = errors.New("result exceeds replay budget")
 )
 
 type JobRunner func(context.Context, string, ValidatedRequest) (BacktestResultResponse, error)
@@ -26,10 +27,10 @@ type JobOptions struct {
 
 func DefaultJobOptions() JobOptions {
 	return JobOptions{
-		Workers: 1,
-		QueueSize: 4,
-		MaxRetained: 20,
-		Retention: 30 * time.Minute,
+		Workers:        1,
+		QueueSize:      4,
+		MaxRetained:    20,
+		Retention:      3 * time.Hour,
 		MaxResultBytes: 16 << 20,
 		MaxStoredBytes: 64 << 20,
 	}
@@ -62,13 +63,13 @@ func NewJobManager(runner JobRunner, options JobOptions) (*JobManager, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &JobManager{
-		jobs: map[string]*job{},
-		queue: make(chan *job, options.QueueSize),
+		jobs:    map[string]*job{},
+		queue:   make(chan *job, options.QueueSize),
 		options: options,
-		runner: runner,
-		ctx: ctx,
-		cancel: cancel,
-		done: make(chan struct{}),
+		runner:  runner,
+		ctx:     ctx,
+		cancel:  cancel,
+		done:    make(chan struct{}),
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < options.Workers; i++ {
@@ -121,7 +122,7 @@ func (m *JobManager) Status(id string) (JobStatusResponse, error) {
 		return JobStatusResponse{}, ErrNotFound
 	}
 	out := JobStatusResponse{
-		ID: id,
+		ID:     id,
 		Status: j.status,
 	}
 	if j.failure != nil {
@@ -133,6 +134,12 @@ func (m *JobManager) Status(id string) (JobStatusResponse, error) {
 
 // Result returns immutable serialized bytes. The caller owns its copy.
 func (m *JobManager) Result(id string) ([]byte, error) {
+	return m.resultLimited(id, 0)
+}
+
+// resultLimited checks the serialized size BEFORE allocating a caller-owned
+// copy. Zero retains the ordinary result endpoint's existing behavior.
+func (m *JobManager) resultLimited(id string, maxBytes int64) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.prune(time.Now())
@@ -142,6 +149,9 @@ func (m *JobManager) Result(id string) ([]byte, error) {
 	}
 	if j.status != StatusCompleted {
 		return nil, ErrNotReady
+	}
+	if maxBytes > 0 && int64(len(j.result)) > maxBytes {
+		return nil, ErrResultTooLarge
 	}
 	return append([]byte(nil), j.result...), nil
 }
