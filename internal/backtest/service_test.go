@@ -24,7 +24,13 @@ func (p *fakeProvider) FetchBars(ctx context.Context, symbol string, start, end 
 	if p.fail {
 		return nil, errors.New("provider leaked secret")
 	}
-	return p.bars[symbol], nil
+	var bars []marketdata.BarTick
+	for _, bar := range p.bars[symbol] {
+		if !bar.Timestamp.Before(start) && !bar.Timestamp.After(end) {
+			bars = append(bars, bar)
+		}
+	}
+	return bars, nil
 }
 func (p *fakeProvider) FetchRiskFreeRate(ctx context.Context, key string, asOf time.Time) (float64, error) {
 	p.asOf = asOf

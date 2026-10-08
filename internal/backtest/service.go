@@ -124,27 +124,39 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 			Equity:      request.InitialCapital,
 			BuyingPower: request.InitialCapital,
 		},
-		Allocations:      allocations,
-		BarsBySymbol:     make(map[string][]marketdata.BarTick),
-		MonteCarloInput:  s.settings.MonteCarlo,
-		VolatilityWindow: s.settings.VolatilityWindow,
-		PeriodsPerYear:   s.settings.PeriodsPerYear,
+		Allocations:       allocations,
+		BarsBySymbol:      make(map[string][]marketdata.BarTick),
+		VolatilityHistory: make(map[string][]marketdata.BarTick),
+		MonteCarloInput:   s.settings.MonteCarlo,
+		VolatilityWindow:  s.settings.VolatilityWindow,
+		PeriodsPerYear:    s.settings.PeriodsPerYear,
 	}
 	for _, a := range allocations {
-		bars, err := s.provider.FetchBars(ctx, a.Symbol, request.Start, request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret)
+		// A bounded calendar buffer accommodates ordinary weekends and holidays.
+		fetchStart := request.Start.AddDate(0, 0, -(2*s.settings.VolatilityWindow + 14))
+		bars, err := s.provider.FetchBars(ctx, a.Symbol, fetchStart, request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret)
 		if err != nil {
 			if ctx.Err() != nil {
 				return fail("canceled")
 			}
 			return fail("provider_error")
 		}
+		if err := marketdata.ValidateBars(a.Symbol, bars); err != nil {
+			return fail("invalid_data")
+		}
+		split := 0
 		for _, bar := range bars {
-			if bar.Timestamp.Before(request.Start) || bar.Timestamp.After(request.End) {
+			if bar.Timestamp.Before(fetchStart) || bar.Timestamp.After(request.End) {
 				return fail("invalid_data")
 			}
+			if bar.Timestamp.Before(request.Start) {
+				split++
+			}
 		}
-		c.BarsBySymbol[a.Symbol] = bars
+		c.BarsBySymbol[a.Symbol] = bars[split:]
+		c.VolatilityHistory[a.Symbol] = bars[max(0, split-s.settings.VolatilityWindow):split]
 	}
+
 	// FRED accepts a calendar date, while Alpaca accepts UTC timestamp bounds.
 	// Select the requested US market date without changing the end instant.
 	// The constant-rate model remains; historical curves remain future work.

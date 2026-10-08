@@ -16,11 +16,12 @@ import (
 	"apexquant/internal/marketdata"
 )
 
-type phase4Provider struct{ 
-	zeroVolume bool 
+type phase4Provider struct {
+	zeroVolume bool
 }
 
-func (p phase4Provider) FetchBars(_ context.Context, symbol string, start, _ time.Time, _, _ string) ([]marketdata.BarTick, error) {
+func (p phase4Provider) FetchBars(_ context.Context, symbol string, start, end time.Time, _, _ string) ([]marketdata.BarTick, error) {
+	start = time.Date(2025, 9, 5, 4, 0, 0, 0, time.UTC)
 	prices := [][3]float64{{100, 100, 100}, {100, 90, 110}, {91, 92, 100}, {93, 94, 100}, {95, 110, 100}, {109, 109, 100}}
 	if symbol == "MSFT" {
 		prices = [][3]float64{{200, 200, 200}, {200, 200, 200}, {200, 200, 200}, {200, 200, 200}, {200, 200, 200}, {200, 200, 200}}

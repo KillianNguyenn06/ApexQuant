@@ -74,6 +74,18 @@ func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error
 		if err := marketdata.ValidateBars(allocation.Symbol, bars); err != nil {
 			return nil, err
 		}
+		history := config.VolatilityHistory[allocation.Symbol]
+		if len(history) > config.VolatilityWindow {
+			return nil, fmt.Errorf("too many volatility history bars for %s", allocation.Symbol)
+		}
+		if len(history) > 0 {
+			if err := marketdata.ValidateBars(allocation.Symbol, history); err != nil {
+				return nil, err
+			}
+			if history[len(history)-1].Timestamp.UTC().Format("2006-01-02") >= bars[0].Timestamp.UTC().Format("2006-01-02") {
+				return nil, fmt.Errorf("volatility history must precede trading for %s", allocation.Symbol)
+			}
+		}
 	}
 	return allocations, nil
 }

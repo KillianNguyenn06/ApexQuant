@@ -3,6 +3,7 @@ package backtest
 import (
 	"apexquant/internal/account"
 	"apexquant/internal/algorithm"
+	"apexquant/internal/marketdata"
 	"apexquant/internal/session"
 	"apexquant/internal/simulation"
 	"fmt"
@@ -34,7 +35,6 @@ func RunBacktest(config BacktestConfig) (BacktestResult, error) {
 	}
 
 	acc := config.InitialAccount
-	monteCarloInput := config.MonteCarloInput
 
 	referenceSymbol := allocations[0].Symbol
 	barCount := len(symbols[referenceSymbol].Bars)
@@ -86,28 +86,10 @@ func RunBacktest(config BacktestConfig) (BacktestResult, error) {
 		for _, allocation := range allocations {
 			state := symbols[allocation.Symbol]
 			bar := state.Bars[i]
-
-			startIndex := max(
-				0,
-				i-config.VolatilityWindow+1,
-			)
-
-			availableBars := state.Bars[startIndex : i+1]
-
-			if len(availableBars) >= 3 {
-				volatility, err := simulation.AnnualizedVolatility(
-					availableBars,
-					config.PeriodsPerYear,
-				)
-				if err != nil {
-					return BacktestResult{}, fmt.Errorf(
-						"%s volatility: %w",
-						allocation.Symbol,
-						err,
-					)
-				}
-
-				monteCarloInput.Volatility = volatility
+			monteCarloInput := config.MonteCarloInput
+			monteCarloInput.Volatility, err = volatilityAt(config, allocation.Symbol, i)
+			if err != nil {
+				return BacktestResult{}, fmt.Errorf("%s volatility: %w", allocation.Symbol, err)
 			}
 
 			algorithm.VWAP(bar, &state.VWAP, &state.Indicators)
@@ -153,6 +135,24 @@ func RunBacktest(config BacktestConfig) (BacktestResult, error) {
 		Snapshots:      snapshots,
 	}, nil
 
+}
+
+// volatilityAt uses only prior history and trading bars through the current close.
+// Preparation bars never enter indicator, order, account, or replay processing.
+func volatilityAt(config BacktestConfig, symbol string, index int) (float64, error) {
+	trading := config.BarsBySymbol[symbol][max(0, index-config.VolatilityWindow+1) : index+1]
+	needed := config.VolatilityWindow - len(trading)
+	history := config.VolatilityHistory[symbol]
+	if len(history) > needed {
+		history = history[len(history)-needed:]
+	}
+	bars := make([]marketdata.BarTick, 0, len(history)+len(trading))
+	bars = append(bars, history...)
+	bars = append(bars, trading...)
+	if len(bars) < 3 {
+		return config.MonteCarloInput.Volatility, nil
+	}
+	return simulation.AnnualizedVolatility(bars, config.PeriodsPerYear)
 }
 
 func calculateEquity(cash float64, allocations []session.PortfolioAllocation, symbols map[string]*session.SymbolState) float64 {

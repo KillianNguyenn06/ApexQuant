@@ -303,8 +303,8 @@ Current phase:
 ```text
 Phase 3 complete: HTTP contract, reusable service, bounded background jobs,
 and API integration/concurrency verification.
-Phase 4: replay timeline and bounded SSE transport implemented (Tasks 1–2).
-Task 3 verification passed; the phase-wide learning review remains.
+Phase 4 complete: replay timeline, bounded SSE transport, and phase-wide verification.
+Phase 5 preparation: historical volatility warmup implemented; dashboard pending.
 ```
 
 ## Roadmap
@@ -345,6 +345,30 @@ event IDs, disconnect handling and separate stream limits.
 - Buy and Sell markers.
 - Portfolio-equity chart.
 - Position and order tables.
+
+#### Historical volatility preparation
+
+Before trading starts, the shared service fetches earlier daily prices to prepare
+each stock's volatility estimate. With the default 20-bar window, the request
+extends 54 calendar days before the selected start to allow for weekends and
+holidays, and retains only the latest 20 earlier bars per stock. This is a bounded
+history request, not a guarantee that every symbol has 20 available bars.
+
+At each trading day's close, volatility uses the latest available bars through
+that close, up to the configured window. It is the sample standard deviation of
+daily log returns multiplied by the square root of 252 (by default). Earlier
+preparation bars roll out as trading bars arrive. Future prices are never used.
+
+Preparation bars do not create trades, change starting capital, initialize VWAP
+or bands, or appear in result snapshots or replay events. If fewer than three
+total bars are available, the configured fallback volatility (20% by default)
+still applies until an estimate can be calculated. `initial_volatility` in API
+settings continues to describe that fallback, not each stock's rolling estimate.
+Simulation count remains a backend setting; the settings panel and manual
+volatility override have not yet been implemented. Regression tests check the
+first-day estimate against an independent calculation, rolling-window behavior,
+isolation between symbols, exclusion of future prices, and separation of
+preparation data from trading and replay data.
 
 ### Phase 6 — Backtest Reporting
 
@@ -576,5 +600,4 @@ changing portfolio values on Hold days, unavailable versus zero indicator values
 concurrent stream admission and capacity recovery, and fresh connection deadlines.
 The three-hour lifetime and retention checks use controlled timestamps rather
 than waiting three hours. The full race suite passed with 93.4% API statement
-coverage; static analysis and both server and CLI builds also passed. The
-phase-wide learning review remains before closing Phase 4.
+coverage; static analysis and both server and CLI builds also passed.

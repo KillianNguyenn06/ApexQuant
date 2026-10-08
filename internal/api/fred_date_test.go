@@ -62,8 +62,8 @@ func TestFREDMarketCalendarBoundary(t *testing.T) {
 						switch r.URL.Path {
 						case "/bars":
 							barsCalled = true
-							if r.URL.Query().Get("start") != request.Start.UTC().Format(time.RFC3339) || r.URL.Query().Get("end") != request.End.UTC().Format(time.RFC3339) {
-								t.Fatal("Alpaca timestamp bounds changed")
+							if r.URL.Query().Get("start") != request.Start.AddDate(0, 0, -54).UTC().Format(time.RFC3339) || r.URL.Query().Get("end") != request.End.UTC().Format(time.RFC3339) {
+								t.Fatal("incorrect preparation bounds or changed trading end")
 							}
 							var bars []string
 							for i := -2; i <= 0; i++ {

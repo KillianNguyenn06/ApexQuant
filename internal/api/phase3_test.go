@@ -19,7 +19,7 @@ import (
 	"apexquant/internal/marketdata"
 )
 
-type tradingProvider struct{
+type tradingProvider struct {
 	failure string
 }
 
@@ -27,6 +27,7 @@ func (p tradingProvider) FetchBars(ctx context.Context, symbol string, start, en
 	if p.failure == "bars" {
 		return nil, errors.New("private-provider-key")
 	}
+	start = time.Date(2025, 9, 5, 4, 0, 0, 0, time.UTC)
 	prices := [][3]float64{{100, 100, 100}, {100, 90, 110}, {91, 110, 110}, {109, 109, 109}}
 	if symbol == "MSFT" {
 		prices = [][3]float64{{200, 200, 200}, {201, 201, 201}, {202, 202, 202}, {203, 203, 203}}

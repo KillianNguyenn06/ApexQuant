@@ -40,6 +40,7 @@ func requestHTTP(h http.Handler, method, path, body, contentType string) *httpte
 type httpProvider struct{}
 
 func (httpProvider) FetchBars(ctx context.Context, symbol string, start, end time.Time, key, secret string) ([]marketdata.BarTick, error) {
+	start = time.Date(2025, 9, 5, 4, 0, 0, 0, time.UTC)
 	bars := []marketdata.BarTick{}
 	for i := 0; i < 3; i++ {
 		bars = append(bars, marketdata.BarTick{Symbol: symbol, Timestamp: start.AddDate(0, 0, i), Open: 100, High: 100, Low: 100, Close: 100, VWAP: 100, Volume: 100})
