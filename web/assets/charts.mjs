@@ -4,24 +4,48 @@ const NS = 'http://www.w3.org/2000/svg';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const numeric = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const calendar = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-const dateLabel = value => calendar.format(new Date(`${value}T00:00:00Z`));
+const minuteCalendar = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
+const dateLabel = value => value.includes('T') ? minuteCalendar.format(new Date(value)) : calendar.format(new Date(`${value}T00:00:00Z`));
 const motions = new WeakMap();
+
+// Aggregate only the already-replayed prefix. Indicators remain samples of the
+// minute strategy, and all execution markers survive coarser candle views.
+export function aggregateFrames(frames, timeframe) {
+  if (timeframe === '1Min') return frames;
+  const day = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York' });
+  const groups = [];
+  for (const frame of frames) {
+    const stamp = Date.parse(frame.date);
+    const key = timeframe === '1Day' ? day.format(new Date(stamp)) : new Date(Math.floor(stamp / 300000) * 300000).toISOString();
+    let group = groups.at(-1);
+    if (group?.date !== key) {
+      group = { ...frame, date: key, snapshots: frame.snapshots.map(s => ({ ...s, bar: { ...s.bar }, filled_orders: [...(s.filled_orders ?? (s.filled_order ? [s.filled_order] : []))] })) };
+      groups.push(group);
+    } else {
+      group.account = frame.account; group.positions = frame.positions;
+      group.snapshots = group.snapshots.map(previous => {
+        const current = frame.snapshots.find(s => s.bar.symbol === previous.bar.symbol);
+        const a = previous.bar, b = current.bar, volume = a.volume + b.volume;
+        return { ...current, bar: { ...b, open: a.open, high: Math.max(a.high, b.high), low: Math.min(a.low, b.low), volume, vwap: volume ? ((a.vwap ?? 0) * a.volume + (b.vwap ?? 0) * b.volume) / volume : null }, filled_orders: [...previous.filled_orders, ...(current.filled_orders ?? (current.filled_order ? [current.filled_order] : []))] };
+      });
+    }
+  }
+  return groups;
+}
 
 export function resetChart(svg) { svg.onpointermove = null; svg.onpointerleave = null; svg.onkeydown = null; svg.onblur = null; motions.get(svg)?.clear(); svg.replaceChildren(); svg.dataset.motion = 'settled'; }
 export function priceData(frames, symbol, limit = 80) {
   return frames.slice(-limit).map(frame => ({ date: frame.date, snapshot: frame.snapshots.find(s => s.bar.symbol === symbol) })).filter(row => row.snapshot);
 }
 export function filledMarkers(series) {
-  return series.flatMap((row, index) => {
-    const order = row.snapshot.filled_order;
-    return order?.status === 'filled' && ['buy', 'sell'].includes(order.action) && finite(order.filled_price)
-      ? [{ index, action: order.action, price: order.filled_price, quantity: order.quantity }] : [];
-  });
+  return series.flatMap((row, index) => (row.snapshot.filled_orders ?? (row.snapshot.filled_order ? [row.snapshot.filled_order] : []))
+    .filter(order => order.status === 'filled' && ['buy', 'sell'].includes(order.action) && finite(order.filled_price))
+    .map(order => ({ index, action: order.action, price: order.filled_price, quantity: order.quantity })));
 }
 export function valueBounds(values) {
-  const available = values.filter(finite);
-  if (!available.length) return [0, 1];
-  const lo = Math.min(...available), hi = Math.max(...available);
+  let lo = Infinity, hi = -Infinity;
+  for (const value of values) if (finite(value)) { lo = Math.min(lo, value); hi = Math.max(hi, value); }
+  if (lo === Infinity) return [0, 1];
   const pad = Math.max((hi - lo) * .12, Math.max(Math.abs(lo), Math.abs(hi)) * .003, .01);
   return [lo - pad, hi + pad];
 }
@@ -96,14 +120,14 @@ function paths(layout, values, first, className) {
   }
 }
 
-export function drawPrice(svg, frames, symbol, duration = 0) {
+export function drawPrice(svg, frames, symbol, duration = 0, windowSize = null) {
   const width = Math.max(300, svg.getBoundingClientRect().width || 800);
-  const limit = Math.max(12, Math.min(80, Math.floor((width - 88) / 9)));
+  const limit = windowSize === Infinity ? frames.length : Math.max(12, windowSize || Math.min(80, Math.floor((width - 88) / 9)));
   // Retain one outgoing candle during the pan; the plot clips it at the edge.
   const series = priceData(frames, symbol, limit + 1), visible = series.slice(-limit);
   if (!series.length) { resetChart(svg); return; }
   const first = frames.length - series.length, visibleFirst = frames.length - visible.length;
-  const values = visible.flatMap(({ snapshot: s }) => [s.bar.low, s.bar.high, s.indicator.vwap, s.indicator.upper_band, s.indicator.lower_band]);
+  const values = visible.flatMap(({ snapshot: s }) => [s.bar.low, s.bar.high, s.indicator.vwap, s.indicator.upper_band, s.indicator.lower_band, s.indicator.ema]);
   const layout = setup(svg, values, visibleFirst, frames.length - 1, width < 480 ? 280 : 330);
   const { updates, plot, left, right, top, bottom } = layout;
   series.forEach(({ date, snapshot: s }, i) => {
@@ -117,7 +141,7 @@ export function drawPrice(svg, frames, symbol, duration = 0) {
       attributes(body, { x: px - candleWidth / 2, y: Math.min(open, close), width: candleWidth, height: Math.max(1.5, Math.abs(close - open)) });
     });
   });
-  for (const [key, className] of [['upper_band', 'band'], ['lower_band', 'band'], ['vwap', 'vwap']]) paths(layout, series.map(row => row.snapshot.indicator[key]), first, `chart-line ${className}`);
+  for (const [key, className] of [['upper_band', 'band'], ['lower_band', 'band'], ['vwap', 'vwap'], ['ema', 'ema']]) paths(layout, series.map(row => row.snapshot.indicator[key]), first, `chart-line ${className}`);
   for (const marker of filledMarkers(series)) {
     const buy = marker.action === 'buy', group = node('g', { class: `trade-marker ${buy ? 'buy' : 'sell'}` });
     const point = node('circle', { r: 3 }), box = node('rect', { width: 32, height: 15, rx: 3 }), text = node('text', { 'text-anchor': 'middle' }, buy ? 'BUY' : 'SELL');
@@ -132,7 +156,7 @@ export function drawPrice(svg, frames, symbol, duration = 0) {
   const latest = visible.at(-1).snapshot.bar.close, guide = node('line', { x1: left, x2: right, class: 'price-guide' }), dot = node('circle', { r: 3, class: 'price-dot' }); plot.append(guide, dot);
   updates.push(({ x, y }) => { attributes(guide, { y1: y(latest), y2: y(latest) }); attributes(dot, { cx: x(frames.length - 1), cy: y(latest) }); });
   dates(svg, visible, visibleFirst, layout);
-  svg.setAttribute('aria-label', `${symbol} daily prices with VWAP, bands and filled trade markers through ${visible.at(-1).date}. Showing ${visible.length} of ${frames.length} received days.`);
+  svg.setAttribute('aria-label', `${symbol} prices with VWAP, bands and filled trade markers through ${visible.at(-1).date}. Showing ${visible.length} of ${frames.length} received bars.`);
   layout.finish(duration); return visible.length;
 }
 
@@ -175,7 +199,7 @@ export function drawEquity(svg, frames, duration = 0, onInspect = () => {}) {
   };
   svg.onblur = () => inspect(null);
   dates(svg, frames, 0, layout);
-  svg.setAttribute('aria-label', `Portfolio equity through ${frames.at(-1).date}: ${numeric.format(values.at(-1))} US dollars. ${frames.length} received trading days.`);
+  svg.setAttribute('aria-label', `Portfolio equity through ${frames.at(-1).date}: ${numeric.format(values.at(-1))} US dollars. ${frames.length} received bars.`);
   layout.finish(duration);
 }
 
@@ -186,4 +210,19 @@ export function equityIndex(px, left, right, first, last, count) {
 export function equityReturn(equity, capital) {
   const gain = equity - capital;
   return { gain, percent: capital > 0 ? gain / capital * 100 : null };
+}
+
+// Reuse the stock-card style for total equity; use only the displayed prefix.
+const sparkMotions = new WeakMap();
+export function drawSpark(svg, values, duration = 0, first = 0) {
+  if (!sparkMotions.has(svg)) sparkMotions.set(svg, new CameraMotion());
+  const motion = sparkMotions.get(svg);
+  if (!values.length) { motion.clear(); svg.replaceChildren(); return; }
+  const [lo, hi] = valueBounds(values);
+  let line = svg.querySelector('polyline');
+  if (!line) { line = node('polyline'); svg.append(line); }
+  svg.setAttribute('viewBox', '0 0 160 35');
+  motion.move({ first, last: first + Math.max(1, values.length - 1), min: lo, max: hi }, camera => {
+    line.setAttribute('points', values.map((v, i) => `${values.length === 1 ? 80 : (first + i - camera.first) / (camera.last - camera.first) * 160},${32 - (v - camera.min) / (camera.max - camera.min) * 29}`).join(' '));
+  }, duration);
 }

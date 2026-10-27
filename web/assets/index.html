@@ -13,22 +13,22 @@
   <header class="topbar">
     <a class="brand" href="/" aria-label="ApexQuant home"><span class="brand-mark">A<span>Q</span></span><span>Apex<span class="brand-light">Quant</span><small>HISTORICAL RESEARCH</small></span></a>
     <span class="status-pill" id="top-status">● Ready to configure</span>
-    <div class="header-meta"><span>MARKET <b>US equities</b></span><span>FREQUENCY <b>Daily · 1D</b></span><span>MODE <b>Historical</b></span></div>
+    <div class="header-meta"><span>MARKET <b>US equities</b></span><span>DATA <b>Daily</b></span><span>MODE <b>Historical</b></span></div>
     <button class="icon-button" id="settings-open" type="button" aria-label="Open backtest settings" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-1 3-3 1-2 4 2 2 1 3 4 2 2-2 3-1 3-4-2-2-1-3-4-2-2 2Z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </header>
   <main>
     <div class="page-heading"><div><p class="eyebrow">YOUR MARKET. YOUR HYPOTHESIS.</p><h1>Backtest workspace<span class="accent-dot">.</span></h1></div><p>Build a portfolio. Explore its history.</p></div>
     <div class="workspace">
       <section class="panel price-panel" aria-labelledby="price-title">
-        <div class="panel-header"><div><p class="eyebrow">MARKET VIEW</p><h2 id="price-title">Price &amp; indicators</h2></div><div class="chart-tools"><select id="chart-symbol" aria-label="Chart stock" disabled><option>Select stock</option></select><span class="tag">1D BARS</span></div></div>
-        <div class="chart-legend"><span class="legend-price">Close <b id="price-value">—</b></span><span class="legend-vwap">VWAP <b id="vwap-value">—</b></span><span class="legend-band">Upper / lower bands</span></div>
+        <div class="panel-header"><div><p class="eyebrow">MARKET VIEW</p><h2 id="price-title">Price &amp; indicators</h2></div><div class="chart-tools"><button type="button" id="market-zoom-out" aria-label="Zoom out Market View" title="Show more candles">−</button><button type="button" id="market-zoom-in" aria-label="Zoom in Market View" title="Show fewer candles">+</button><button type="button" id="market-zoom-all" title="Show all replayed candles">All</button><select id="chart-timeframe" aria-label="Chart candle size" disabled><option value="1Min">1 minute</option><option value="5Min">5 minutes</option><option value="1Day" selected>1 day</option></select><select id="chart-symbol" aria-label="Chart stock" disabled><option>Select stock</option></select><span class="tag" id="chart-frequency">1 DAY</span></div></div>
+        <div class="chart-legend"><span class="legend-price">Close <b id="price-value">—</b></span><span class="legend-vwap">VWAP <b id="vwap-value">—</b></span><span class="legend-ema">EMA20 <b id="ema-value">—</b></span><span class="legend-band">Upper / lower bands</span></div>
         <div class="chart-empty" id="price-empty"><div class="empty-icon" aria-hidden="true">↗</div><h3>Your strategy, in motion</h3><p>Run a backtest to replay its historical prices.</p><span class="empty-rule"></span></div>
         <div class="price-chart-wrap" id="price-chart-wrap" hidden><svg id="price-chart" role="img" aria-label="Historical price chart"></svg></div>
-        <div class="chart-footer"><span id="price-caption">Historical prices · Every trading day</span><span>FILLED BUY <i class="buy-dot"></i> &nbsp; SELL <i class="sell-dot"></i></span></div>
+        <div class="chart-footer"><span id="price-caption">Historical prices · Every received bar</span><span>FILLED BUY <i class="buy-dot"></i> &nbsp; SELL <i class="sell-dot"></i></span></div>
       </section>
       <section class="panel portfolio-panel" id="portfolio" aria-labelledby="portfolio-title">
-        <div class="panel-header"><div><p class="eyebrow">AT THIS REPLAY DAY</p><h2 id="portfolio-title">Your portfolio</h2></div><span class="tag violet">ALLOCATION</span></div>
-        <div class="portfolio-overview"><span class="subtle" id="portfolio-date">Awaiting replay</span><strong id="portfolio-equity">—</strong><span id="portfolio-return">Return · —</span></div>
+        <div class="panel-header"><div><p class="eyebrow">AT THIS REPLAY BAR</p><h2 id="portfolio-title">Your portfolio</h2></div><span class="tag violet">ALLOCATION</span></div>
+        <div class="portfolio-overview"><span class="subtle" id="portfolio-date">Awaiting replay</span><strong id="portfolio-equity">—</strong><span id="portfolio-return">Return · —</span><svg id="portfolio-spark" class="stock-spark portfolio-spark" role="img" aria-label="Portfolio equity mini-chart"></svg></div>
         <dl class="portfolio-metrics"><div><dt>Cash</dt><dd id="portfolio-cash">—</dd></div><div><dt>Buying power</dt><dd id="portfolio-buying-power">—</dd></div><div><dt>Open positions</dt><dd id="portfolio-open">—</dd></div></dl>
         <div class="stock-cards" id="stock-cards"><p class="quiet-note">Configure a backtest to explore your stocks.</p></div>
         <div class="table-pagination"><button id="stocks-prev" class="secondary-button" type="button" aria-label="Previous stock page" disabled>‹</button><span id="stocks-page">Page 1 / 1</span><button id="stocks-next" class="secondary-button" type="button" aria-label="Next stock page" disabled>›</button></div>
@@ -39,7 +39,7 @@
       <section class="panel equity-panel" aria-labelledby="equity-title">
         <div class="panel-header"><div><p class="eyebrow">THE BIG PICTURE</p><h2 id="equity-title">Portfolio equity <span id="equity-value"></span> <span id="equity-return"></span></h2></div><span class="subtle" id="equity-caption">Cash + market value of holdings</span></div>
         <div class="equity-empty" id="equity-empty">Your portfolio history will appear here during replay.</div>
-        <div class="equity-chart-wrap" id="equity-chart-wrap" hidden><svg id="equity-chart" role="img" aria-label="Historical portfolio equity"></svg><p id="equity-readout" class="equity-readout">Hover over the chart to inspect a trading day.</p></div>
+        <div class="equity-chart-wrap" id="equity-chart-wrap" hidden><svg id="equity-chart" role="img" aria-label="Historical portfolio equity"></svg><p id="equity-readout" class="equity-readout">Hover over the chart to inspect a bar.</p></div>
       </section>
       <section class="panel activity-panel" aria-labelledby="activity-title"><div class="panel-header"><div><p class="eyebrow">WORKSPACE ACTIVITY</p><h2 id="activity-title">Run log</h2></div><span class="tag">LOCAL</span></div><ol id="run-log" aria-label="Recent run activity"><li class="log-empty">Your next experiment starts here.</li></ol></section>
       <section class="panel progress-panel" aria-labelledby="progress-title">
@@ -51,35 +51,36 @@
         <div id="result-summary" class="result-summary" hidden><div><span>Final equity</span><strong id="final-equity">—</strong></div><div><span>Final cash</span><strong id="final-cash">—</strong></div><div><span>Recorded bars</span><strong id="snapshot-count">—</strong></div></div>
         <div class="replay-controls">
           <div class="replay-heading"><strong>Historical replay</strong><span id="replay-state">Awaiting a completed run</span></div>
-          <div class="replay-heading"><span id="replay-day">Day 0 / 0</span><span id="replay-date">—</span></div>
+          <div class="replay-heading"><span id="replay-day">Bar 0 / 0</span><span id="replay-date">—</span></div>
           <progress id="replay-progress" value="0" max="1" aria-label="Historical replay progress"></progress>
           <div class="playback-buttons">
             <button id="replay-restart" class="secondary-button" type="button" aria-label="Restart replay" disabled>↺</button>
-            <button id="replay-previous" class="secondary-button" type="button" aria-label="Previous trading day" disabled>‹</button>
+            <button id="replay-previous" class="secondary-button" type="button" aria-label="Previous bar" disabled>‹</button>
             <button id="replay-play" class="primary-button" type="button" disabled>Play</button>
-            <button id="replay-next" class="secondary-button" type="button" aria-label="Next trading day" disabled>›</button>
-            <select id="replay-speed" aria-label="Replay speed" disabled><option value="0.25">0.25 days/sec</option><option value="0.5">0.5 days/sec</option><option value="1" selected>1 day/sec</option><option value="2">2 days/sec</option><option value="5">5 days/sec</option><option value="10">10 days/sec</option><option value="20">20 days/sec</option></select>
+            <button id="replay-next" class="secondary-button" type="button" aria-label="Next bar" disabled>›</button>
+            <select id="replay-speed" aria-label="Replay speed" disabled><option value="0.25">0.25 bars/sec</option><option value="0.5">0.5 bars/sec</option><option value="1" selected>1 bar/sec</option><option value="2">2 bars/sec</option><option value="5">5 bars/sec</option><option value="10">10 bars/sec</option><option value="20">20 bars/sec</option></select>
           </div>
-          <label class="sr-only" for="replay-seek">Seek within received trading days</label><input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled>
+          <label class="sr-only" for="replay-seek">Seek within received bars</label><input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled>
           <label class="motion-option"><input id="replay-smooth" type="checkbox" checked> Smooth chart motion <span>Respects reduced-motion settings</span></label>
           <p id="replay-error" class="error-message" role="alert" hidden></p>
         </div>
       </section>
       <section class="panel account-panel" aria-labelledby="account-title">
-        <div class="panel-header"><div><p class="eyebrow">AT THIS REPLAY DAY</p><h2 id="account-title">Account &amp; holdings</h2></div><span class="subtle" id="details-date">Awaiting replay</span></div>
+        <div class="panel-header"><div><p class="eyebrow">AT THIS REPLAY BAR</p><h2 id="account-title">Account &amp; holdings</h2></div><span class="subtle" id="details-date">Awaiting replay</span></div>
         <dl class="account-cards"><div><dt>Cash</dt><dd id="day-cash">—</dd></div><div><dt>Buying power</dt><dd id="day-buying-power">—</dd></div><div><dt>Open positions</dt><dd id="day-open-positions">—</dd></div><div><dt>Return</dt><dd id="day-return">—</dd></div></dl>
-        <div class="table-scroll" role="region" aria-label="Position table" tabindex="0"><table><caption class="sr-only">Positions at the displayed replay day</caption><thead><tr><th scope="col">Stock</th><th scope="col">Shares</th><th scope="col">Entry</th><th scope="col">Close</th><th scope="col">Market value</th><th scope="col">Unrealized P&amp;L</th><th scope="col">Target / actual</th><th scope="col">Stop / take-profit</th></tr></thead><tbody id="position-rows"><tr><td colspan="8" class="table-empty">Positions appear after the first replay day.</td></tr></tbody></table></div>
-        <p class="table-note">Target is the requested allocation. Actual is holdings value divided by this day's equity; cash is separate. Unrealized P&amp;L covers open holdings only.</p>
+        <div class="table-scroll" role="region" aria-label="Position table" tabindex="0"><table><caption class="sr-only">Positions at the displayed replay bar</caption><thead><tr><th scope="col">Stock</th><th scope="col">Shares</th><th scope="col">Entry price</th><th scope="col">Closing price</th><th scope="col">Holdings value</th><th scope="col">Unrealized P&amp;L ($)</th><th scope="col">Allocation: target / actual</th><th scope="col">Stop-loss / take-profit</th></tr></thead><tbody id="position-rows"><tr><td colspan="8" class="table-empty">Positions appear after the first replay bar.</td></tr></tbody></table></div>
+        <p class="table-note">Target is the requested allocation. Actual is holdings value divided by this bar's equity; cash is separate. Unrealized P&amp;L covers open holdings only.</p>
       </section>
       <section class="panel orders-panel" aria-labelledby="orders-title">
-        <div class="panel-header"><div><p class="eyebrow">THROUGH THIS REPLAY DAY</p><h2 id="orders-title">Orders</h2></div><span class="tag" id="order-count">0 ORDERS</span></div>
-        <div class="table-scroll" role="region" aria-label="Order table" tabindex="0"><table><caption class="sr-only">Orders observed through the displayed replay day, newest submissions first</caption><thead><tr><th scope="col">Stock / order</th><th scope="col">Action</th><th scope="col">Shares</th><th scope="col">Status</th><th scope="col">Fill price</th><th scope="col">Submitted / filled</th></tr></thead><tbody id="order-rows"><tr><td colspan="6" class="table-empty">No orders observed at this replay day.</td></tr></tbody></table></div>
+        <div class="panel-header"><div><p class="eyebrow">THROUGH THIS REPLAY BAR</p><h2 id="orders-title">Orders</h2></div><span class="tag" id="order-count">0 ORDERS</span></div>
+        <div class="table-scroll" role="region" aria-label="Order table" tabindex="0"><table><caption class="sr-only">Orders observed through the displayed replay bar, newest submissions first</caption><thead><tr><th scope="col">Stock / order</th><th scope="col">Action</th><th scope="col">Shares</th><th scope="col">Status</th><th scope="col">Fill price</th><th scope="col">Submitted / filled</th></tr></thead><tbody id="order-rows"><tr><td colspan="6" class="table-empty">No orders observed at this replay bar.</td></tr></tbody></table></div>
         <div class="table-pagination"><button id="orders-prev" class="secondary-button" type="button" aria-label="Previous order page" disabled>‹</button><span id="orders-page">Page 1 / 1</span><button id="orders-next" class="secondary-button" type="button" aria-label="Next order page" disabled>›</button></div>
-        <p class="table-note">Signals are opportunities. Prices appear only for recorded fills at a later bar's open. Status is the last recorded event; cancellations and rejections are not retained in this history.</p>
+        <p class="table-note">Signals submit after the bar closes; entries fill at the next open. Protective exits can fill within the bar. Both fills and cancellations are retained.</p>
       </section>
       <section class="panel events-panel" aria-labelledby="events-title">
         <div class="panel-header"><div><p class="eyebrow">HISTORICAL ACTIVITY</p><h2 id="events-title">Replay events</h2></div><span class="tag" id="event-count">0 EVENTS</span></div>
-        <div class="table-scroll" role="region" aria-label="Replay event table" tabindex="0"><table><caption class="sr-only">Historical bars, fills and submissions through the displayed day, latest timeline entries first</caption><thead><tr><th scope="col">Historical day (UTC)</th><th scope="col">Event</th><th scope="col">Stock</th><th scope="col">Action / signal</th><th scope="col">Price</th><th scope="col">Shares</th></tr></thead><tbody id="event-rows"><tr><td colspan="6" class="table-empty">Historical events appear during replay.</td></tr></tbody></table></div>
+        <p class="table-note" id="trade-audit">Trade decisions appear during replay.</p>
+        <div class="table-scroll" role="region" aria-label="Replay event table" tabindex="0"><table><caption class="sr-only">Historical bars, fills and submissions through the displayed bar, latest timeline entries first</caption><thead><tr><th scope="col">Historical time (UTC)</th><th scope="col">Event</th><th scope="col">Stock</th><th scope="col">Action / signal</th><th scope="col">Price</th><th scope="col">Shares</th><th scope="col">Reason / risk</th></tr></thead><tbody id="event-rows"><tr><td colspan="7" class="table-empty">Historical events appear during replay.</td></tr></tbody></table></div>
         <div class="table-pagination"><button id="events-prev" class="secondary-button" type="button" aria-label="Previous event page" disabled>‹</button><span id="events-page">Page 1 / 1</span><button id="events-next" class="secondary-button" type="button" aria-label="Next event page" disabled>›</button></div>
       </section>
       <section class="panel configuration-panel" aria-labelledby="configuration-title"><details id="run-configuration"><summary id="configuration-title">Configuration of this run</summary><p class="table-note">The completed run's settings, separate from edits for your next run. This run is temporary and is not saved to disk.</p><dl id="configuration-values" class="configuration-values"><div><dt>Run</dt><dd>Awaiting a completed backtest.</dd></div></dl></details></section>
@@ -106,7 +107,13 @@
     <form id="settings-form" novalidate>
       <fieldset id="settings-fields" disabled><legend class="sr-only">Backtest configuration</legend>
         <label for="initial-capital">Starting capital <span class="label-note">USD</span></label><input id="initial-capital" name="initial_capital" type="number" min="0.01" step="any" value="50000" inputmode="decimal" required aria-describedby="capital-error"><p id="capital-error" class="field-error"></p>
-        <label for="period-preset">Backtest period</label><select id="period-preset"><option value="30">Last 30 calendar days</option><option value="90" selected>Last 90 calendar days</option><option value="180">Last 180 calendar days</option><option value="365">Last year</option><option value="custom">Custom dates</option></select>
+        <label for="execution-timeframe">Strategy execution interval</label><select id="execution-timeframe" aria-describedby="execution-help"><option value="1Day" selected>Daily execution · next-day entries</option><option value="1Min" disabled>Minute execution · temporarily disabled</option></select>
+        <p id="execution-help" class="quiet-note">Daily execution is active. Minute execution is temporarily disabled: long minute histories need disk-backed storage, chunked processing and paged replay before support can be verified. Daily data cannot produce genuine minute candles.</p>
+        <label for="holding-days">Maximum holding period · trading days</label><input id="holding-days" type="number" min="1" max="252" step="1" value="5"><p id="holding-days-error" class="field-error"></p><p class="quiet-note">The entry day counts as day one. Stop/target exits take priority; otherwise exit at the deadline's close.</p>
+        <label for="probability-model">VWAP mean reversion</label><select id="probability-model"><option value="gbm">Off · plain GBM</option><option value="vwap_reversion_auto">Auto · estimate from historical data</option><option value="vwap_reversion">Manual · choose half-life</option></select><p id="probability-model-error" class="field-error"></p>
+        <label for="reversion-half-life">Reversion half-life · trading days</label><input id="reversion-half-life" type="number" min="0.1" max="252" step="0.1" value="5" disabled><p id="reversion-half-life-error" class="field-error"></p><p class="quiet-note">Auto estimates each stock’s price response to the previous bar’s VWAP using up to 252 observations before the run, then keeps the estimate fixed. It requires at least 60 usable observations. Manual overrides estimation with your chosen half-life. A shorter half-life means a stronger pull; neither choice guarantees recovery.</p>
+        <label for="vwap-window">Daily VWAP window · trading days</label><input id="vwap-window" type="number" min="2" max="252" step="1" value="20"><p id="vwap-window-error" class="field-error"></p><p class="quiet-note">Daily execution uses recent prices for VWAP and both bands. Minute execution uses session VWAP, reset each day.</p>
+          <label for="period-preset">Backtest period</label><select id="period-preset"><option value="7" selected>Last 7 calendar days</option><option value="30">Last 30 calendar days</option><option value="90">Last 90 calendar days</option><option value="180">Last 180 calendar days</option><option value="365">Last year</option><option value="1826">Last 5 years</option><option value="3653">Last 10 years</option><option value="custom">Custom dates</option></select>
         <div class="date-fields"><div><label for="start-date">Start date</label><input id="start-date" name="start_date" type="date" required aria-describedby="start-error"><p id="start-error" class="field-error"></p></div><div><label for="end-date">End date</label><input id="end-date" name="end_date" type="date" required aria-describedby="end-error"><p id="end-error" class="field-error"></p></div></div>
         <p id="date-limit-note" class="quiet-note"></p>
         <div class="volatility-note"><span class="tag">AUTOMATIC</span><h3>Market-based volatility</h3><p>Calculated separately for each stock using earlier prices. A configured fallback is used when there isn’t enough history.</p></div>
@@ -114,6 +121,11 @@
       <div class="dialog-actions"><button id="settings-cancel" class="secondary-button" type="button">Cancel</button><button id="settings-save" class="primary-button" type="submit" disabled>Apply settings</button><button class="primary-button" id="run-button" type="submit" form="backtest-form" disabled>Run backtest <span>→</span></button></div>
     </form>
   </dialog>
+  <aside id="model-notification" class="corner-notification" aria-label="Mean-reversion error" hidden>
+    <button id="model-notification-dismiss" class="notification-dismiss" type="button" aria-label="Dismiss mean-reversion notification">×</button>
+    <div role="alert"><strong>Unreliable estimate</strong><p id="model-notification-message"></p></div>
+    <button id="model-notification-settings" class="secondary-button" type="button">Review settings</button>
+  </aside>
   <noscript><p class="error-message">Enable JavaScript to configure and run backtests.</p></noscript>
 </body>
 </html>

@@ -719,6 +719,8 @@ label {
 table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
 thead th { position: sticky; top: 0; background: #101923; z-index: 1; color: var(--muted); font-weight: 500; }
 th, td { text-align: left; padding: 12px 18px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+/* Keep the short holdings table header in normal flow for reliable Safari rendering. */
+.account-panel thead th { position: static; color: var(--text); font-weight: 600; border-top: 1px solid var(--line); }
 tbody th { color: var(--cyan); font-weight: 500; }
 tbody tr:hover { background: #40d9b407; }
 .table-empty { color: var(--muted); white-space: normal; height: 60px; }
@@ -971,3 +973,17 @@ dialog { max-height:calc(100dvh - 40px); overflow:auto; }
 .chart-line.band { filter:drop-shadow(0 0 3px #efbd6540); }
 .chart-line.equity,.chart-line.vwap { filter:drop-shadow(0 0 4px #40d9b470); }
 @media(max-width:720px) { .portfolio-panel { grid-row:auto; } #equity-return { display:block; margin-top:6px; } .portfolio-metrics dd { font-size:13px; } }
+
+.chart-line.ema { stroke: #c18cff; stroke-width: 1.6; stroke-dasharray: 4 3; }
+
+.legend-ema { color: #c18cff; }
+
+.chart-tools button { min-width: 32px; padding: 5px 9px; border: 1px solid var(--border, #293343); border-radius: 5px; background: #10131c; color: #40d9b4; cursor: pointer; }
+.chart-tools button:disabled { opacity: .35; cursor: default; }
+.portfolio-spark { width: 100%; height: 55px; margin-top: 10px; }
+
+.corner-notification { position:fixed; right:22px; bottom:22px; z-index:20; width:min(360px, calc(100vw - 32px)); padding:18px; background:var(--panel); border:1px solid var(--red); border-radius:10px; box-shadow:0 8px 30px #0009, 0 0 14px #ff806d16; }
+.corner-notification strong { display:block; color:var(--red); padding-right:24px; font-size:14px; }
+.corner-notification p { color:var(--text); font-size:12px; line-height:1.6; margin:10px 0 14px; }
+.notification-dismiss { position:absolute; top:9px; right:10px; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:22px; padding:2px 7px; }
+@media (max-width:700px) { .corner-notification { right:16px; bottom:16px; } }

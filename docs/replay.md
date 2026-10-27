@@ -5,6 +5,12 @@ Task 1 implements the replay timeline and JSON payloads in
 The input is one complete `BacktestResultResponse`, already mapped from a
 completed engine result. Replay never runs the engine again.
 
+## Minute execution compatibility
+
+For results with `data.timeframe = "1Min"`, each group represents one exact UTC minute, and `portfolio.date` contains its RFC3339 timestamp. Existing `total_days` and `day_index` field names are retained for wire compatibility but count execution bars in this mode. All stocks in a group must share the same timestamp and closing account. Playback speed is execution bars per second. The following daily examples still describe legacy `1Day` runs.
+
+The browser commits only complete groups, including Hold bars, and aggregates only already-received minutes into optional 5-minute or daily candles. It preserves all `filled_orders` markers, including an entry and protective exit in the same minute. It uses the legacy `filled_order` field only when the array is absent. Canceled/rejected pending orders appear in `order_events`; `decision_reason`, `execution_reason`, and optional `risk` explain eligibility and sizing. Minute `indicator` adds `ema`, `ema_slope` and `ema_ready`; VWAP availability resets each session. Changing display interval never reruns strategy decisions. See the README intraday section for execution rules and limitations.
+
 ## Event sequence
 
 | Event | Payload | Frequency |
@@ -289,3 +295,82 @@ pacing. Tests use a controlled animation clock to verify cancellation, one-frame
 scheduling, exact settlement and interrupted transitions. Browser checks observe
 changing candle coordinates with unchanged day/price/equity at 1 day/sec, immediate
 pause/opt-out settlement, rolling-window clipping and faster long-history replay.
+
+
+### Daily touch execution and decision audit
+
+Daily entries recognize a low touching the prior observed day's lower band,
+including equality, or a close at/below the current lower band. The prior band was
+known before the candle formed; today's completed indicator cannot be used to
+claim an earlier intraday touch. Entries are evaluated at close and fill at the
+next observed open, subject to funding, allocation and valid protective levels.
+A recovered close with a nonpositive reward is explicitly rejected, not silently
+converted into a profitable-looking historical fill.
+
+Stops and targets on open positions use daily high/low touches. Opening gaps
+execute at the observed open; otherwise the boundary price is used. If both
+boundaries touch without a known opening exit, stop-first is the documented OHLC
+assumption. Protective exits can execute on the entry candle or final candle.
+A snapshot preserves every fill in `filled_orders`; `filled_order` is the final
+fill for compatibility. There is no same-bar reentry after a protective exit.
+
+Daily snapshots now carry decision and execution reasons, rejected/canceled order
+events, and model probabilities/Kelly sizing when evaluated. Replay activity shows
+these diagnostics and cumulative opportunity/submission/fill counts through the
+displayed frame. Risk rejections do not imply missing source bars or a replay bug.
+Daily VWAP and bands use a rolling window (20 observed trading days by default,
+configurable from 2 to 252); no breakout entry or EMA gate was
+introduced. The GBM five-day outcome model and Kelly timeout treatment remain
+separate modeling limitations; this change does not claim to resolve them.
+
+Daily results include `settings.daily_vwap_window`, the effective indicator window. API `vwap_window` applies only to daily execution. Missing metadata in older results denotes legacy cumulative VWAP. The window does not change replay ordering or event counts.
+
+
+### Daily decision diagnostics and model settings
+
+Resolved settings include `holding_days`, `probability_model` and optional
+`reversion_half_life_days`. The horizon is `holding_days / 252` years. The
+probability model defaults to plain GBM. Manual VWAP reversion uses the chosen half-life; Auto estimates each symbol before the run. Both freeze signal VWAP during each simulation.
+`data.rate_policy` identifies the historical-vintage or fixed-before-start policy;
+`data.risk_free_rate` is the initial/fixed value, not a rate shared by every bar.
+Entry `risk` diagnostics include `risk_free_rate`, `model` and
+`timeout_mean_return` (fractional price return conditional on timeout). Win/loss
+fields remain barrier classifications, with timeouts separate. Empirical Kelly
+uses all terminal payoffs, which remain transient server-side samples.
+
+Deadline exits use `holding_expiry_close` or, after an unavailable zero-volume
+deadline, `holding_expiry_delayed_open`; they remain ordinary Sell fills in replay.
+They prohibit same-bar reentry. Protective touches have priority on the deadline;
+on an overdue exit day, only opening protective gaps can precede the open sale. A run ending before
+a position's deadline leaves it marked at the last close, not silently sold.
+
+
+Provider-loading failures retain `provider_error` and may add the allowlisted
+`provider` value `alpaca` or `fred` with a fixed public message. Unknown provider
+labels and raw provider error text are discarded. This context distinguishes
+price-data failures from historical-rate failures without exposing credentials.
+
+
+### Automatic VWAP mean reversion
+
+The dashboard exposes Off (plain GBM), Auto, and Manual (half-life override).
+Auto fits `log(P[t+1]/P[t]) = c + b*log(VWAP[t]/P[t]) + error`, using
+only preparation bars strictly before trading begins. VWAP uses the selected
+rolling window and a complete window at each calibration observation. Measuring
+actual price returns excludes mechanical VWAP catch-up from the response.
+An intercept separates background drift from the distance response.
+Up to 252 transitions are used, with at least 60 required; the 95% approximate
+Newey-West (5-lag) slope interval must lie strictly inside (0,1). Half-life is
+`ln(2)/[-ln(1-b)]`, bounded to 0.1–252 trading days. Fitted annual log drift is
+`c * [-ln(1-b)] / b * periods_per_year`, matching the one-day conditional mean
+of the OU simulation. Rolling market volatility is still estimated separately.
+With drift, the long-run expected log level can be offset from VWAP; half-life
+measures decay around that level. This is empirical calibration, not proof of
+causation, a validated forecast, or a guarantee of trading profits.
+
+Estimates are frozen for the entire run (they may become stale in long runs),
+recorded per symbol in `settings.reversion_estimates`, and never silently replaced
+with manual values or GBM. Any unreliable symbol fails the job with
+`unreliable_reversion`; the dashboard displays a dismissible corner notification with a Review settings button; inputs remain preserved.
+Changing the VWAP window recalibrates Auto on the next run. Auto requires daily
+execution and may need history before the earliest permitted trading start.

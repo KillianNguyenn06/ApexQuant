@@ -1,24 +1,26 @@
 import { createAPI, BacktestController } from './api.mjs';
 import { dateValue, shiftDate, validateForm } from './form.mjs';
 import { ReplayController } from './replay.mjs';
-import { drawPrice, drawEquity, resetChart, equityReturn } from './charts.mjs';
-import { motionDuration } from './motion.mjs';
+import { drawPrice, drawEquity, resetChart, equityReturn, aggregateFrames, drawSpark } from './charts.mjs';
+import { motionDuration, ValueMotion } from './motion.mjs';
 import { detailsAt, pageRows, runConfiguration } from './details.mjs';
 
 const $ = id => document.getElementById(id);
 const api = createAPI();
-const money = value => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Math.abs(value) < .005 ? 0 : value) : '—';
+const moneyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+const money = value => Number.isFinite(value) ? moneyFormatter.format(Math.abs(value) < .005 ? 0 : value) : '—';
 let limits, settings, busy = false;
 const dialog = $('settings-dialog');
 const replay = new ReplayController(renderReplay);
 const controller = new BacktestController(api, renderState);
 let replayJob = null, chartSymbol = '', lastReplayMode = '', chartModel = null;
 let orderPage = 0, eventPage = 0, detailModel = null, detailView = -2, detailState;
+let priceWindow = 80;
 let painted = null, stockPage = 0, allocationDraft = null;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const quantity = value => Number.isFinite(value) ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 }).format(value) : '—';
 const percent = value => Number.isFinite(value) ? `${value.toFixed(2)}%` : '—';
-const orderDate = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().slice(0, 10) : '—';
+const orderDate = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().replace('.000Z', 'Z') : '—';
 
 function rows() {
   return [...$('allocation-rows').children].map(row => ({ symbol: row.querySelector('[data-symbol]').value, percent: row.querySelector('[data-percent]').value }));
@@ -53,30 +55,37 @@ function clearErrors() {
 }
 function setSummary() {
   $('capital-summary').textContent = money(Number(settings.initial_capital));
-  $('date-summary').textContent = `${settings.start_date} → ${settings.end_date}`;
+  $('date-summary').textContent = `${settings.start_date} → ${settings.end_date} · ${settings.timeframe === '1Day' ? 'Daily' : 'Minute'} execution`;
 }
 function readSettings() {
-  return { initial_capital: $('initial-capital').value, start_date: $('start-date').value, end_date: $('end-date').value };
+  return { holding_days:$('holding-days').value, probability_model:$('probability-model').value, reversion_half_life_days:$('reversion-half-life').value, vwap_window: $('vwap-window').value, timeframe: $('execution-timeframe').value, initial_capital: $('initial-capital').value, start_date: $('start-date').value, end_date: $('end-date').value };
 }
 function populateSettings() {
+  $('holding-days').value=settings.holding_days || 5;
+  $('probability-model').value=settings.probability_model || 'gbm';
+  $('reversion-half-life').value=settings.reversion_half_life_days || 5;
+  $('reversion-half-life').disabled=$('probability-model').value !== 'vwap_reversion';
+  $('vwap-window').value = settings.vwap_window || 20;
+  $('vwap-window').disabled = settings.timeframe !== '1Day';
   $('initial-capital').value = settings.initial_capital;
+  $('execution-timeframe').value = settings.timeframe || '1Day';
   $('start-date').value = settings.start_date; $('end-date').value = settings.end_date;
   $('period-preset').value = settings.preset || 'custom';
-  ['capital-error', 'start-error', 'end-error'].forEach(id => $(id).textContent = '');
+  ['capital-error', 'start-error', 'end-error', 'vwap-window-error', 'holding-days-error', 'probability-model-error', 'reversion-half-life-error'].forEach(id => $(id).textContent = '');
 }
 function showSettings() {
   if (!settings || busy) return;
   allocationDraft = rows(); populateSettings(); dialog.showModal();
 }
 function inputFor(field) {
-  const ids = { initial_capital: 'initial-capital', start_date: 'start-date', end_date: 'end-date' };
+  const ids = { holding_days:'holding-days', probability_model:'probability-model', reversion_half_life_days:'reversion-half-life', vwap_window: 'vwap-window', initial_capital: 'initial-capital', start_date: 'start-date', end_date: 'end-date' };
   if (ids[field]) return $(ids[field]);
   const match = /^allocations\[(\d+)\]\.(symbol|percent)$/.exec(field);
   return match ? $('allocation-rows').children[Number(match[1])]?.querySelector(match[2] === 'symbol' ? '[data-symbol]' : '[data-percent]') : null;
 }
 function showErrors(errors) {
   clearErrors();
-  const settingFields = { initial_capital: 'capital-error', start_date: 'start-error', end_date: 'end-error' };
+  const settingFields = { holding_days:'holding-days-error', probability_model:'probability-model-error', reversion_half_life_days:'reversion-half-life-error', vwap_window: 'vwap-window-error', initial_capital: 'capital-error', start_date: 'start-error', end_date: 'end-error' };
   const messages = [];
   for (const [field, message] of Object.entries(errors)) {
     inputFor(field)?.setAttribute('aria-invalid', 'true');
@@ -95,7 +104,7 @@ function log(message) {
 
 let lastPhase = '';
 function renderState(state) {
-  if (state.phase === 'submitting') { replay.reset(); replayJob = null; }
+  if (state.phase === 'submitting') { replay.reset(); replayJob = null; $('model-notification').hidden = true; }
   busy = ['submitting', 'queued', 'running', 'checking', 'loading_result'].includes(state.phase);
   $('portfolio-fields').disabled = busy || !limits;
   $('run-button').disabled = busy || !limits; $('settings-fields').disabled = busy || !limits;
@@ -124,6 +133,10 @@ function renderState(state) {
   if (state.phase !== lastPhase) log(text[0]);
   lastPhase = state.phase;
   if (state.error?.field) showErrors({ [state.error.field]: state.error.message });
+  if (state.phase === 'failed' && state.error?.code === 'unreliable_reversion') {
+    $('model-notification-message').textContent = 'Auto could not find a reliable estimate for one or more stocks. Choose Manual or Off, or adjust your stocks, dates, or VWAP window.';
+    $('model-notification').hidden = false;
+  }
   if (state.phase === 'completed') {
     $('final-equity').textContent = money(state.result.final_account.equity);
     $('final-cash').textContent = money(state.result.final_account.cash);
@@ -146,42 +159,51 @@ function renderCharts({ animate = false, force = false } = {}) {
   const current = frames.at(-1);
   $('price-empty').hidden = !!current; $('price-chart-wrap').hidden = !current;
   $('equity-empty').hidden = !!current; $('equity-chart-wrap').hidden = !current;
-  $('price-value').textContent = '—'; $('vwap-value').textContent = '—'; $('equity-value').textContent = '';
+  $('price-value').textContent = '—'; $('vwap-value').textContent = '—'; $('ema-value').textContent = '—'; $('equity-value').textContent = '';
   $('equity-caption').textContent = 'Cash + market value of holdings';
-  $('price-caption').textContent = 'Historical prices · Every trading day';
+  $('price-caption').textContent = 'Historical prices · Every received bar';
   $('equity-return').textContent = '';
-  if (!current) { resetChart($('price-chart')); resetChart($('equity-chart')); return; }
+  if (!current) { for (const id of ['market-zoom-in', 'market-zoom-out', 'market-zoom-all']) $(id).disabled = true; resetChart($('price-chart')); resetChart($('equity-chart')); return; }
   const snapshot = current.snapshots.find(s => s.bar.symbol === chartSymbol);
-  const count = drawPrice($('price-chart'), frames, chartSymbol, duration);
+  const chartFrames = replay.model.result.data.timeframe === '1Min' ? aggregateFrames(frames, $('chart-timeframe').value) : frames;
+  const count = drawPrice($('price-chart'), chartFrames, chartSymbol, duration, priceWindow);
+  $('market-zoom-in').disabled = Math.min(priceWindow, chartFrames.length) <= 12;
+  $('market-zoom-out').disabled = priceWindow >= chartFrames.length;
+  $('market-zoom-all').disabled = !chartFrames.length;
   drawEquity($('equity-chart'), frames, duration, frame => {
-    if (!frame) { $('equity-readout').textContent = 'Hover over the chart, or use arrow keys, to inspect a trading day.'; return; }
+    if (!frame) { $('equity-readout').textContent = 'Hover over the chart, or use arrow keys, to inspect a bar.'; return; }
     const change = equityReturn(frame.account.equity, replay.model.result.request.initial_capital);
     $('equity-readout').textContent = `${frame.date} · Equity ${money(frame.account.equity)} · ${signedMoney(change.gain)} (${signedPercent(change.percent)})`;
   });
-  $('equity-readout').textContent = 'Hover over the chart, or use arrow keys, to inspect a trading day.';
+  $('equity-readout').textContent = 'Hover over the chart, or use arrow keys, to inspect a bar.';
   $('price-value').textContent = snapshot.bar.close.toFixed(2);
   $('vwap-value').textContent = snapshot.indicator.vwap === null ? '—' : snapshot.indicator.vwap.toFixed(2);
+  $('ema-value').textContent = Number.isFinite(snapshot.indicator.ema) ? `${snapshot.indicator.ema.toFixed(2)}${snapshot.indicator.ema_ready ? '' : ' (warming)'}` : '—';
   $('equity-value').textContent = money(current.account.equity);
   const change = equityReturn(current.account.equity, replay.model.result.request.initial_capital);
   $('equity-return').textContent = `${signedMoney(change.gain)} (${signedPercent(change.percent)})`;
   tone($('equity-return'), change.gain);
-  $('equity-caption').textContent = `Historical day · ${current.date}`;
-  $('price-caption').textContent = `${current.date} · Showing latest ${count} of ${frames.length} days`;
+  $('equity-caption').textContent = `Historical bar · ${current.date}`;
+  $('price-caption').textContent = `${current.date} · Showing latest ${count} of ${chartFrames.length} candles`;
 }
 
 function renderReplay(state) {
   const model = state.model, playing = state.mode === 'playing';
   if (model !== chartModel) {
     chartModel = model; $('chart-symbol').replaceChildren();
+    $('chart-timeframe').value = model?.result.data.timeframe === '1Day' ? '1Day' : '1Min';
     chartSymbol = model?.symbols[0] || '';
     for (const symbol of model?.symbols || []) { const option = document.createElement('option'); option.value = symbol; option.textContent = symbol; $('chart-symbol').append(option); }
-    $('price-title').textContent = model ? 'Daily price & indicators' : 'Price & indicators';
+    $('price-title').textContent = model ? (model.result.data.timeframe === '1Min' ? 'Price, VWAP & EMA20' : 'Daily price & VWAP') : 'Price & indicators';
   }
   $('chart-symbol').disabled = !model;
+  if (model?.result.data.timeframe === '1Day') $('chart-timeframe').value = '1Day';
+  $('chart-timeframe').disabled = !model || model.result.data.timeframe !== '1Min';
+  $('chart-frequency').textContent = model?.result.data.timeframe === '1Day' ? '1 DAY' : $('chart-timeframe').selectedOptions[0].textContent;
   const modeText = { idle: 'Awaiting a completed run', ready: 'Ready', playing: 'Playing', paused: 'Paused', completed: 'Complete', interrupted: 'Connection interrupted' }[state.mode];
   $('replay-state').textContent = modeText;
-  $('replay-day').textContent = `Day ${state.view + 1} / ${model?.totalDays || 0}`;
-  $('replay-date').textContent = model?.frames[state.view]?.date || 'Before first trading day';
+  $('replay-day').textContent = `Bar ${state.view + 1} / ${model?.totalDays || 0}`;
+  $('replay-date').textContent = model?.frames[state.view]?.date || 'Before first bar';
   $('replay-progress').max = model?.totalDays || 1; $('replay-progress').value = state.view + 1;
   $('replay-play').disabled = !model || (model.complete && state.view === model.frames.length - 1);
   $('replay-play').textContent = playing ? 'Pause' : state.mode === 'interrupted' ? 'Resume' : 'Play';
@@ -198,6 +220,7 @@ function renderReplay(state) {
   lastReplayMode = state.mode;
   renderCharts({ animate: playing, force: !playing && state.mode !== 'completed' });
   renderDetails();
+  renderPortfolio();
 }
 
 function tableRows(id, values, columns, empty) {
@@ -227,10 +250,11 @@ function renderPages() {
   tableRows('order-rows', orders.rows.map(o => [
     `${o.symbol} · ${o.id}`, o.action.toUpperCase(), quantity(o.quantity), o.status,
     money(o.filled_price), `${orderDate(o.created_at)} / ${o.filled_on || '—'}`,
-  ]), 6, 'No orders observed at this replay day.');
+  ]), 6, 'No orders observed at this replay bar.');
   tableRows('event-rows', events.rows.map(e => [
     e.date, e.type, e.symbol, e.action.toUpperCase(), money(e.price), quantity(e.quantity),
-  ]), 6, 'Historical events appear during replay.');
+    [e.reason?.replaceAll('_', ' '), e.risk ? `Win ${percent(e.risk.win_probability * 100)} · Loss ${percent(e.risk.loss_probability * 100)} · Timeout ${percent(e.risk.timeout_probability * 100)} · Kelly ${percent(e.risk.kelly_fraction * 100)}` : ''].filter(Boolean).join(' · '),
+  ]), 7, 'Historical events appear during replay.');
 }
 function renderDetails() {
   if (detailModel === replay.model && detailView === replay.view) return;
@@ -238,7 +262,7 @@ function renderDetails() {
   if (changedModel) stockPage = 0;
   detailModel = replay.model; detailView = replay.view;
   detailState = detailsAt(detailModel, detailView); orderPage = 0; eventPage = 0;
-  $('details-date').textContent = detailState.date ? `${detailState.date} · Daily close` : 'Awaiting replay';
+  $('details-date').textContent = detailState.date ? `${detailState.date} · Bar close` : 'Awaiting replay';
   const account = detailState.account;
   $('day-cash').textContent = money(account?.cash); $('day-buying-power').textContent = money(account?.buying_power);
   $('day-open-positions').textContent = account?.open_positions ?? '—';
@@ -248,8 +272,10 @@ function renderDetails() {
   tableRows('position-rows', detailState.positions.map(p => [
     p.symbol, quantity(p.quantity), money(p.entry_price), money(p.current_price), money(p.market_value), money(p.unrealized_pnl),
     `${percent(p.target_percent)} / ${percent(p.actual_percent)}`, `${money(p.stop_loss_price)} / ${money(p.take_profit_price)}`,
-  ]), 8, 'Positions appear after the first replay day.');
-  renderPages(); renderPortfolio();
+  ]), 8, 'Positions appear after the first replay bar.');
+  renderPages();
+  const audit = detailState.tradeAudit;
+  $('trade-audit').textContent = audit ? `Through this bar: ${audit.opportunities} buy opportunities · ${audit.submitted} submitted · ${audit.buys} buy fills · ${audit.sells} sell fills · ${audit.blocked} blocked before submission. Reasons and risk estimates appear below.` : 'Trade decisions appear during replay.';
   if (changedModel) {
     $('configuration-values').replaceChildren();
     for (const [label, value] of runConfiguration(detailModel?.result)) {
@@ -277,7 +303,7 @@ async function connect() {
     limits = checkLimits(await api.config());
     for (const option of $('period-preset').options) option.disabled = option.value !== 'custom' && Number(option.value) > limits.max_range_days;
     if (!settings) {
-      $('period-preset').value = limits.max_range_days >= 90 ? '90' : limits.max_range_days >= 30 ? '30' : 'custom';
+      $('period-preset').value = limits.max_range_days >= 7 ? '7' : 'custom';
       if ($('period-preset').value === 'custom') {
         $('end-date').value = limits.latest_end_date;
         $('start-date').value = shiftDate(limits.latest_end_date, -(limits.max_range_days - 1));
@@ -285,7 +311,7 @@ async function connect() {
       settings = { ...readSettings(), preset: $('period-preset').value };
     }
     for (const id of ['start-date', 'end-date']) { $(id).min = limits.earliest_start_date; $(id).max = limits.latest_end_date; }
-    $('date-limit-note').textContent = `Available from ${limits.earliest_start_date}, subject to each stock’s history. Up to ${limits.max_range_days} calendar days per run. Dates use ${limits.market_timezone}.`;
+    $('date-limit-note').textContent = `Available from ${limits.earliest_start_date}, subject to each stock’s history. Up to ${limits.max_range_days} calendar days per run. Daily execution can use the full date range within the server’s ${limits.max_snapshots.toLocaleString()}-snapshot budget. Minute execution is temporarily disabled pending long-history storage and performance work. Dates use ${limits.market_timezone}.`;
     $('portfolio-fields').disabled = false; $('settings-fields').disabled = false;
     $('settings-save').disabled = false; $('settings-open').disabled = false; $('settings-edit').disabled = false;
     setSummary(); updateTotal(); renderState({ phase: 'idle' });
@@ -304,7 +330,7 @@ $('settings-form').addEventListener('submit', event => {
   event.preventDefault(); if (!limits || busy) return;
   const proposed = readSettings();
   const { errors } = validateForm({ ...proposed, allocations: rows() }, limits);
-  ['capital-error', 'start-error', 'end-error'].forEach(id => $(id).textContent = '');
+  ['capital-error', 'start-error', 'end-error', 'vwap-window-error', 'holding-days-error', 'probability-model-error', 'reversion-half-life-error'].forEach(id => $(id).textContent = '');
   showErrors(errors);
   if (Object.keys(errors).length) { inputFor(Object.keys(errors)[0])?.focus(); return; }
   settings = { ...proposed, preset: $('period-preset').value }; setSummary(); allocationDraft = null; dialog.close();
@@ -317,7 +343,7 @@ $('backtest-form').addEventListener('submit', async event => {
   showErrors(errors);
   if (Object.keys(errors).length) {
     const field = Object.keys(errors)[0];
-    if (['initial_capital', 'start_date', 'end_date'].includes(field)) { dialog.showModal(); }
+    if (['initial_capital', 'start_date', 'end_date', 'holding_days', 'probability_model', 'reversion_half_life_days', 'vwap_window'].includes(field)) { dialog.showModal(); }
     (inputFor(field) || $('allocation-rows').querySelector('input'))?.focus();
     return;
   }
@@ -338,44 +364,107 @@ for (const name of ['orders', 'events']) {
     $(`${name}-${direction}`).addEventListener('click', () => { if (name === 'orders') orderPage += delta; else eventPage += delta; renderPages(); });
   }
 }
-$('replay-smooth').addEventListener('change', () => renderCharts({ force: true }));
-reducedMotion.addEventListener('change', () => renderCharts({ force: true }));
-new ResizeObserver(() => renderCharts({ force: true })).observe($('price-chart-wrap'));
-new ResizeObserver(() => renderCharts({ force: true })).observe($('equity-chart-wrap'));
-window.addEventListener('pagehide', () => { controller.stop(); replay.pause(false); resetChart($('price-chart')); resetChart($('equity-chart')); });
+$('replay-smooth').addEventListener('change', () => { renderCharts({ force: true }); renderPortfolio(); });
+reducedMotion.addEventListener('change', () => { renderCharts({ force: true }); renderPortfolio(); });
+// Chart contents can change wrapper height without changing the drawing width.
+// Those notifications must not cancel an in-progress camera animation.
+const chartResizeObserver = new ResizeObserver(() => {
+  if (!painted || (painted.priceWidth === $('price-chart-wrap').clientWidth && painted.equityWidth === $('equity-chart-wrap').clientWidth)) return;
+  renderCharts();
+});
+chartResizeObserver.observe($('price-chart-wrap'));
+chartResizeObserver.observe($('equity-chart-wrap'));
+window.addEventListener('pagehide', () => {
+  chartResizeObserver.disconnect();
+  portfolioMotion.clear(); drawSpark($('portfolio-spark'), []);
+  for (const card of portfolioCards.values()) drawSpark(card.querySelector('svg'), []);
+  controller.stop(); replay.pause(false); resetChart($('price-chart')); resetChart($('equity-chart'));
+});
 
 
 function signedMoney(value) { return `${value > 0 ? '+' : ''}${money(value)}`; }
 function signedPercent(value) { return `${value > 0 ? '+' : ''}${percent(value)}`; }
 function tone(element, value) { element.classList.toggle('positive', value > 0); element.classList.toggle('negative', value < 0); }
+const portfolioMotion = new ValueMotion();
+let portfolioPainted = null;
+const portfolioCards = new Map();
 function renderPortfolio() {
   const account = detailState?.account;
-  $('portfolio-date').textContent = detailState?.date ? `${detailState.date} · Daily close` : 'Awaiting replay';
-  $('portfolio-equity').textContent = money(account?.equity);
-  $('portfolio-return').textContent = account ? `${signedMoney(account.gain)} (${signedPercent(account.return_percent)})` : 'Return · —';
-  tone($('portfolio-return'), account?.gain);
-  $('portfolio-cash').textContent = money(account?.cash); $('portfolio-buying-power').textContent = money(account?.buying_power); $('portfolio-open').textContent = account?.open_positions ?? '—';
   const page = pageRows(detailState?.positions || [], stockPage, 4); stockPage = page.page;
+  const signature = { model: replay.model, view: replay.view, page: stockPage, speed: replay.speed };
+  const same = portfolioPainted && signature.model === portfolioPainted.model && signature.page === portfolioPainted.page && signature.speed === portfolioPainted.speed;
+  const duration = replay.mode === 'playing' && same && signature.view === portfolioPainted.view + 1 && $('replay-smooth').checked && !reducedMotion.matches ? motionDuration(replay.speed) : 0;
+  portfolioPainted = signature;
+  const frames = replay.model?.frames.slice(0, replay.view + 1) || [];
+  drawSpark($('portfolio-spark'), frames.slice(-160).map(frame => frame.account.equity), duration, Math.max(0, frames.length - 160));
+  $('portfolio-spark').setAttribute('aria-label', `Portfolio equity over the latest ${Math.min(160, frames.length)} replay bars`);
+  $('portfolio-date').textContent = detailState?.date ? `${detailState.date} · Bar close` : 'Awaiting replay';
+  // Exact snapshots are available even while the visual readout counts toward them.
+  $('portfolio-equity').setAttribute('aria-label', `Recorded equity: ${money(account?.equity)}`);
+  $('portfolio-equity').title = `Recorded bar close: ${money(account?.equity)}`;
+  $('portfolio-open').textContent = account?.open_positions ?? '—';
   $('stocks-page').textContent = `Page ${page.page + 1} / ${page.pages}`;
   $('stocks-prev').disabled = page.page === 0; $('stocks-next').disabled = page.page === page.pages - 1;
-  const cards = $('stock-cards'); cards.replaceChildren();
-  if (!page.rows.length) { const note = document.createElement('p'); note.className = 'quiet-note'; note.textContent = 'Your stocks appear after the first replay day.'; cards.append(note); }
-  for (const position of page.rows) {
-    const card = document.createElement('button'); card.type = 'button'; card.className = 'stock-card'; card.setAttribute('aria-pressed', String(chartSymbol === position.symbol)); card.setAttribute('aria-label', `Show ${position.symbol} price chart`);
-    const head = document.createElement('div'); head.className = 'stock-card-head';
-    const symbol = document.createElement('strong'), allocation = document.createElement('span'); symbol.textContent = position.symbol; allocation.textContent = `${percent(position.target_percent)} target`; head.append(symbol, allocation);
-    const value = document.createElement('strong'); value.className = 'stock-card-value'; value.textContent = money(position.market_value);
-    const meta = document.createElement('div'); meta.className = 'stock-card-meta';
-    const price = document.createElement('span'), pnl = document.createElement('span'); price.textContent = `${money(position.current_price)} close`; pnl.textContent = position.unrealized_pnl === null ? 'No open holding' : `${signedMoney(position.unrealized_pnl)} unrealized`; tone(pnl, position.unrealized_pnl); meta.append(price, pnl);
-    const values = (replay.model?.frames.slice(0, replay.view + 1) || []).slice(-40).map(frame => frame.snapshots.find(s => s.bar.symbol === position.symbol).bar.close);
-    const ns = 'http://www.w3.org/2000/svg', spark = document.createElementNS(ns, 'svg'), line = document.createElementNS(ns, 'polyline'); spark.setAttribute('viewBox', '0 0 160 35'); spark.setAttribute('aria-hidden','true'); spark.classList.add('stock-spark');
-    const lo = Math.min(...values), range = Math.max(...values) - lo || 1;
-    line.setAttribute('points', values.map((v,i) => `${values.length === 1 ? 80 : i / (values.length - 1) * 160},${30 - (v-lo)/range*25}`).join(' ')); spark.append(line);
-    card.append(head, value, meta, spark); cards.append(card);
-    card.addEventListener('click', () => { chartSymbol = position.symbol; $('chart-symbol').value = chartSymbol; renderCharts(); renderPortfolio(); });
+  const cards = $('stock-cards'), visible = new Set(page.rows.map(p => p.symbol));
+  for (const [symbol, card] of portfolioCards) {
+    if (!visible.has(symbol)) { drawSpark(card.querySelector('svg'), []); card.remove(); portfolioCards.delete(symbol); }
   }
+  cards.querySelector('.quiet-note')?.remove();
+  if (!page.rows.length) { const note = document.createElement('p'); note.className = 'quiet-note'; note.textContent = 'Your stocks appear after the first replay bar.'; cards.append(note); }
+  const target = { equity: account?.equity, gain: account?.gain, returnPercent: account?.return_percent, cash: account?.cash, buyingPower: account?.buying_power };
+  for (const position of page.rows) {
+    let card = portfolioCards.get(position.symbol);
+    if (!card) {
+      card = document.createElement('button'); card.type = 'button'; card.className = 'stock-card';
+      card.innerHTML = '<div class="stock-card-head"><strong></strong><span></span></div><strong class="stock-card-value"></strong><div class="stock-card-meta"><span></span><span></span></div>';
+      const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); spark.classList.add('stock-spark'); spark.setAttribute('aria-hidden', 'true'); card.append(spark);
+      card.addEventListener('click', () => { chartSymbol = position.symbol; $('chart-symbol').value = chartSymbol; renderCharts(); renderPortfolio(); });
+      portfolioCards.set(position.symbol, card); cards.append(card);
+    }
+    card.setAttribute('aria-pressed', String(chartSymbol === position.symbol));
+    card.setAttribute('aria-label', `Show ${position.symbol} price chart; recorded holdings ${money(position.market_value)}, close ${money(position.current_price)}`);
+    card.querySelector('.stock-card-head strong').textContent = position.symbol;
+    card.querySelector('.stock-card-head span').textContent = `${percent(position.target_percent)} target`;
+    const values = frames.slice(-40).map(frame => frame.snapshots.find(s => s.bar.symbol === position.symbol).bar.close);
+    drawSpark(card.querySelector('svg'), values, duration, Math.max(0, frames.length - 40));
+    target[`${position.symbol}:value`] = position.market_value;
+    target[`${position.symbol}:price`] = position.current_price;
+    target[`${position.symbol}:pnl`] = position.unrealized_pnl;
+  }
+  portfolioMotion.move(target, values => {
+    $('portfolio-equity').textContent = money(values.equity);
+    $('portfolio-return').textContent = account ? `${signedMoney(values.gain)} (${signedPercent(values.returnPercent)})` : 'Return · —';
+    tone($('portfolio-return'), values.gain);
+    $('portfolio-cash').textContent = money(values.cash); $('portfolio-buying-power').textContent = money(values.buyingPower);
+    for (const position of page.rows) {
+      const card = portfolioCards.get(position.symbol), meta = card.querySelector('.stock-card-meta');
+      card.querySelector('.stock-card-value').textContent = money(values[`${position.symbol}:value`]);
+      meta.children[0].textContent = `${money(values[`${position.symbol}:price`])} close`;
+      const pnl = values[`${position.symbol}:pnl`];
+      meta.children[1].textContent = pnl === null ? 'No open holding' : `${signedMoney(pnl)} unrealized`;
+      tone(meta.children[1], pnl);
+    }
+  }, duration);
 }
 for (const [name, delta] of [['prev', -1], ['next', 1]]) $('stocks-'+name).addEventListener('click', () => { stockPage += delta; renderPortfolio(); });
 
-addRow('AAPL', 60); addRow('MSFT', 40);
+addRow('AAPL', 50); addRow('NVDA', 50);
 await connect();
+
+$('chart-timeframe').addEventListener('change', () => { painted = null; renderReplay(replay); });
+
+for (const [id, change] of [['market-zoom-in', -1], ['market-zoom-out', 1]]) $(id).addEventListener('click', () => {
+  const frames = replay.model?.frames.slice(0, replay.view + 1) || [];
+  const displayed = replay.model?.result.data.timeframe === '1Min' ? aggregateFrames(frames, $('chart-timeframe').value) : frames;
+  const current = Math.min(priceWindow, Math.max(12, displayed.length));
+  priceWindow = change < 0 ? Math.max(12, Math.floor(current / 2)) : Math.min(Math.max(12, displayed.length), current * 2);
+  painted = null; renderCharts();
+});
+$('market-zoom-all').addEventListener('click', () => { priceWindow = Infinity; painted = null; renderCharts(); });
+
+$('execution-timeframe').addEventListener('change', () => { $('vwap-window').disabled = $('execution-timeframe').value !== '1Day'; });
+
+$('probability-model').addEventListener('change',()=>{ $('reversion-half-life').disabled=$('probability-model').value!=='vwap_reversion'; });
+
+$('model-notification-dismiss').addEventListener('click', () => { $('model-notification').hidden = true; $('settings-edit').focus(); });
+$('model-notification-settings').addEventListener('click', () => { $('model-notification').hidden = true; showSettings(); });
