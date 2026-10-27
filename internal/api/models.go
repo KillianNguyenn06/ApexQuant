@@ -1,13 +1,21 @@
 // Package api defines the public JSON contract independently of engine models.
 package api
 
-import "time"
+import (
+	"apexquant/internal/simulation"
+	"time"
+)
 
 type CreateBacktestRequest struct {
-	InitialCapital float64      `json:"initial_capital"`
-	Allocations    []Allocation `json:"allocations"`
-	StartDate      string       `json:"start_date"`
-	EndDate        string       `json:"end_date"`
+	HoldingDays           int          `json:"holding_days,omitempty"`
+	ProbabilityModel      string       `json:"probability_model,omitempty"`
+	ReversionHalfLifeDays float64      `json:"reversion_half_life_days,omitempty"`
+	VWAPWindow            int          `json:"vwap_window,omitempty"`
+	Timeframe             string       `json:"timeframe,omitempty"`
+	InitialCapital        float64      `json:"initial_capital"`
+	Allocations           []Allocation `json:"allocations"`
+	StartDate             string       `json:"start_date"`
+	EndDate               string       `json:"end_date"`
 }
 type Allocation struct {
 	Symbol  string  `json:"symbol"`
@@ -32,9 +40,10 @@ type JobStatusResponse struct {
 	Error  *APIError `json:"error"`
 }
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Field   string `json:"field,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Field    string `json:"field,omitempty"`
 }
 
 func (e *APIError) Error() string {
@@ -45,24 +54,29 @@ type ErrorResponse struct {
 	Error *APIError `json:"error"`
 }
 
-// Settings are supplied by server configuration, not accepted from the browser.
+// Model settings are supplied by the server. The daily indicator window is user configurable.
 // Seed zero denotes randomized execution, not a captured reproducible random seed.
 type SimulationSettings struct {
-	VolatilityWindow  int     `json:"volatility_window"`
-	PeriodsPerYear    float64 `json:"periods_per_year"`
-	InitialVolatility float64 `json:"initial_volatility"`
-	TimeHorizon       float64 `json:"time_horizon"`
-	NumPaths          int     `json:"num_paths"`
-	NumSteps          int     `json:"num_steps"`
-	Seed              int64   `json:"seed"`
+	ReversionEstimates    map[string]simulation.ReversionEstimate `json:"reversion_estimates,omitempty"`
+	HoldingDays           int                                     `json:"holding_days"`
+	ProbabilityModel      string                                  `json:"probability_model"`
+	ReversionHalfLifeDays float64                                 `json:"reversion_half_life_days,omitempty"`
+	DailyVWAPWindow       int                                     `json:"daily_vwap_window,omitempty"`
+	VolatilityWindow      int                                     `json:"volatility_window"`
+	PeriodsPerYear        float64                                 `json:"periods_per_year"`
+	InitialVolatility     float64                                 `json:"initial_volatility"`
+	TimeHorizon           float64                                 `json:"time_horizon"`
+	NumPaths              int                                     `json:"num_paths"`
+	NumSteps              int                                     `json:"num_steps"`
+	Seed                  int64                                   `json:"seed"`
 }
 type DataInfo struct {
+	RatePolicy   string  `json:"rate_policy,omitempty"`
 	Feed         string  `json:"feed"`
 	Timeframe    string  `json:"timeframe"`
 	Adjustment   string  `json:"adjustment"`
 	RiskFreeRate float64 `json:"risk_free_rate"`
-	// The current provider returns a rate without its observation date.
-	// Keep that date null until the provider supplies it; do not invent one.
+	// Initial historical observation date; legacy fixed-rate providers may omit it.
 	RiskFreeRateDate *string `json:"risk_free_rate_date"`
 }
 type BacktestResultResponse struct {
@@ -98,14 +112,17 @@ type Bar struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 type Indicators struct {
+	EMA               *float64 `json:"ema,omitempty"`
+	EMASlope          *float64 `json:"ema_slope,omitempty"`
+	EMAReady          bool     `json:"ema_ready,omitempty"`
 	VWAP              *float64 `json:"vwap"`
 	StandardDeviation *float64 `json:"standard_deviation"`
 	UpperBand         *float64 `json:"upper_band"`
 	LowerBand         *float64 `json:"lower_band"`
 }
 
-// Signal is an opportunity, not a submitted order. The engine does not retain
-// Monte Carlo probabilities in snapshots, so they are not advertised here.
+// Signal is an opportunity, not a submitted order. Model probabilities and
+// sizing diagnostics, when evaluated, are retained separately in Snapshot.Risk.
 type Signal struct {
 	Symbol    string    `json:"symbol"`
 	Action    string    `json:"action"`
@@ -122,12 +139,28 @@ type Order struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 type Snapshot struct {
-	Timestamp      time.Time  `json:"timestamp"`
-	Bar            Bar        `json:"bar"`
-	Indicator      Indicators `json:"indicator"`
-	Signal         Signal     `json:"signal"`
-	Position       Position   `json:"position"`
-	Account        Account    `json:"account"`
-	SubmittedOrder *Order     `json:"submitted_order"`
-	FilledOrder    *Order     `json:"filled_order"`
+	FilledOrders    []Order       `json:"filled_orders,omitempty"`
+	OrderEvents     []Order       `json:"order_events,omitempty"`
+	DecisionReason  string        `json:"decision_reason,omitempty"`
+	ExecutionReason string        `json:"execution_reason,omitempty"`
+	Risk            *RiskDecision `json:"risk,omitempty"`
+	Timestamp       time.Time     `json:"timestamp"`
+	Bar             Bar           `json:"bar"`
+	Indicator       Indicators    `json:"indicator"`
+	Signal          Signal        `json:"signal"`
+	Position        Position      `json:"position"`
+	Account         Account       `json:"account"`
+	SubmittedOrder  *Order        `json:"submitted_order"`
+	FilledOrder     *Order        `json:"filled_order"`
+}
+
+type RiskDecision struct {
+	RiskFreeRate       float64 `json:"risk_free_rate"`
+	Model              string  `json:"model"`
+	TimeoutMeanReturn  float64 `json:"timeout_mean_return"`
+	WinProbability     float64 `json:"win_probability"`
+	LossProbability    float64 `json:"loss_probability"`
+	TimeoutProbability float64 `json:"timeout_probability"`
+	KellyFraction      float64 `json:"kelly_fraction"`
+	Quantity           float64 `json:"quantity"`
 }

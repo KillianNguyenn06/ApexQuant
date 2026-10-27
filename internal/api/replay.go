@@ -74,8 +74,8 @@ func (r *ReplayTimeline) Event(index int) (ReplayEvent, bool) {
 
 // NewReplayTimeline accepts the COMPLETE mapped response so volume-dependent
 // null availability is retained. It rejects inconsistent order instead of
-// sorting, dropping, or remapping snapshots. The engine aligns UTC calendar
-// dates, not exact timestamps: within a day allocation order takes precedence.
+// sorting, dropping, or remapping snapshots. Daily runs align calendar dates;
+// minute runs align exact timestamps. Allocation order takes precedence within a group.
 func NewReplayTimeline(result BacktestResultResponse) (*ReplayTimeline, error) {
 	return newReplayTimeline(result, 0)
 }
@@ -114,12 +114,18 @@ func newReplayTimeline(result BacktestResultResponse, maxBytes int64) (*ReplayTi
 	if err := appendEvent(ReplayStart, ReplayStartData{JobID: result.ID, Request: result.Request, Settings: result.Settings, Data: result.Data, TotalDays: r.days, TotalSnapshots: len(result.Snapshots)}); err != nil {
 		return nil, err
 	}
+	periodKey := func(t time.Time) string {
+		if result.Data.Timeframe == "1Min" {
+			return t.UTC().Format(time.RFC3339)
+		}
+		return t.UTC().Format(time.DateOnly)
+	}
 	previousDate := ""
 	var finalPositions map[string]Position
 	var finalAccount Account
 	for day := 0; day < r.days; day++ {
 		group := result.Snapshots[day*n : (day+1)*n]
-		date := group[0].Timestamp.UTC().Format(time.DateOnly)
+		date := periodKey(group[0].Timestamp)
 		if date <= previousDate {
 			return invalid()
 		}
@@ -127,7 +133,7 @@ func newReplayTimeline(result BacktestResultResponse, maxBytes int64) (*ReplayTi
 		positions := make(map[string]Position, n)
 		for symbolIndex, snapshot := range group {
 			symbol := result.Request.Allocations[symbolIndex].Symbol
-			if snapshot.Timestamp.IsZero() || !snapshot.Timestamp.Equal(snapshot.Bar.Timestamp) || snapshot.Timestamp.UTC().Format(time.DateOnly) != date || snapshot.Bar.Symbol != symbol || snapshot.Position.Symbol != symbol || snapshot.Signal.Symbol != symbol || snapshot.Account != group[0].Account {
+			if snapshot.Timestamp.IsZero() || !snapshot.Timestamp.Equal(snapshot.Bar.Timestamp) || periodKey(snapshot.Timestamp) != date || snapshot.Bar.Symbol != symbol || snapshot.Position.Symbol != symbol || snapshot.Signal.Symbol != symbol || snapshot.Account != group[0].Account {
 				return invalid()
 			}
 			if err := appendEvent(ReplaySnapshot, ReplaySnapshotData{DayIndex: day, SnapshotIndex: day*n + symbolIndex, Snapshot: snapshot}); err != nil {
@@ -149,7 +155,8 @@ func newReplayTimeline(result BacktestResultResponse, maxBytes int64) (*ReplayTi
 	return r, nil
 }
 
-// ReplayDayInterval defines playback speed in historical days per real second.
+// ReplayDayInterval defines playback speed in execution bars per real second.
+// Its name and wire day_index fields are retained for legacy clients.
 // The first day is immediate; transport waits only BETWEEN daily groups. Start,
 // a day's stock/portfolio events, and final completion carry no extra delay.
 func ReplayDayInterval(daysPerSecond float64) (time.Duration, error) {

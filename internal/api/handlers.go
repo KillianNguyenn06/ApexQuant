@@ -181,6 +181,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, 400, err)
 		return
 	}
+	if request.Timeframe == "1Min" && !backtest.MinuteExecutionEnabled {
+		writeAPIError(w, 400, &APIError{Code: "minute_execution_disabled", Message: "Minute execution is temporarily disabled while disk-backed history and bounded replay are developed. Choose daily execution.", Field: "timeframe"})
+		return
+	}
 	validated, err := ValidateCreateBacktestRequest(request, time.Now())
 	if err != nil {
 		status := 400
@@ -256,7 +260,10 @@ func writeAPIError(w http.ResponseWriter, status int, err error) {
 func ServiceRunner(service *backtest.Service, metadata DataInfo) JobRunner {
 	return func(ctx context.Context, id string, request ValidatedRequest) (BacktestResultResponse, error) {
 		out, err := service.Run(ctx, backtest.RunRequest{
+			DailyVWAPWindow: request.Request.VWAPWindow,
+			HoldingDays:     request.Request.HoldingDays, ProbabilityModel: request.Request.ProbabilityModel, ReversionHalfLifeDays: request.Request.ReversionHalfLifeDays,
 			InitialCapital: request.Request.InitialCapital,
+			Timeframe:      request.Request.Timeframe,
 			Allocations:    request.Allocations,
 			Start:          request.Start,
 			End:            request.End,
@@ -264,11 +271,14 @@ func ServiceRunner(service *backtest.Service, metadata DataInfo) JobRunner {
 		if err != nil {
 			var e *backtest.ServiceError
 			if errors.As(err, &e) {
-				return BacktestResultResponse{}, &APIError{Code: e.Code}
+				return BacktestResultResponse{}, &APIError{Code: e.Code, Provider: e.Provider}
 			}
 			return BacktestResultResponse{}, err
 		}
 		data := metadata
+		if out.Config.Timeframe != "" {
+			data.Timeframe = out.Config.Timeframe
+		}
 		data.RiskFreeRate = out.Config.MonteCarloInput.RiskFreeRate
 		return NewResultResponse(id, request.Request, out.Config, data, out.Result)
 	}

@@ -1,8 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CameraMotion, motionDuration } from '../assets/motion.mjs';
+import { CameraMotion, ValueMotion, motionDuration } from '../assets/motion.mjs';
 
 const first = {first:0,last:1,min:90,max:110}, next = {first:0,last:2,min:80,max:120};
+test('portfolio numbers settle exactly; stale callbacks cannot overwrite pause or reset', () => {
+  let now = 0, id = 0; const pending = new Map(), stale = [];
+  const motion = new ValueMotion({now:()=>now, request:cb=>{pending.set(++id, cb); return id;}, cancel:id=>{stale.push(pending.get(id)); pending.delete(id);}});
+  const seen = [], initial = {equity:100, pnl:null}, target = {equity:200, pnl:20};
+  motion.move(initial, v=>seen.push(v)); motion.move(target, v=>seen.push(v), 600);
+  now = 300; const cb = [...pending.values()][0]; pending.clear(); cb(now);
+  assert.equal(seen.at(-1).equity, 150); assert.equal(seen.at(-1).pnl, 20);
+  motion.move(target, v=>seen.push(v), 0); assert.deepEqual(seen.at(-1), target);
+  const count = seen.length; stale.at(-1)(600); assert.equal(seen.length, count); assert.equal(pending.size, 0);
+  assert.deepEqual(initial, {equity:100,pnl:null}); assert.deepEqual(target, {equity:200,pnl:20});
+  motion.clear(); assert.equal(motion.value, null);
+});
+test('portfolio numbers use steady transitions at fast playback speeds', () => {
+  for (const speed of [5,10,20]) {
+    let now=0, callback; const motion=new ValueMotion({now:()=>now,request:cb=>{callback=cb;return 1;},cancel:()=>{callback=null;}});
+    let value; const draw=v=>{value=v.equity;};
+    motion.move({equity:100},draw); motion.move({equity:200},draw,motionDuration(speed));
+    now=motionDuration(speed)/2; callback(now); assert.equal(value,150);
+    now=motionDuration(speed); callback(now); assert.equal(value,200);
+    assert.equal(motion.frame,null);
+  }
+});
 function clock() {
   let time=0,id=0; const frames=new Map(), cancelled=[];
   const motion=new CameraMotion({now:()=>time,request:callback=>{frames.set(++id,callback);return id;},cancel:id=>{cancelled.push(frames.get(id));frames.delete(id);}});

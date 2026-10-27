@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -16,6 +17,19 @@ import (
 )
 
 func main() {
+	timeframe := flag.String("timeframe", "1Day", "Execution bars: 1Day (minute execution temporarily disabled)")
+	holdingDays := flag.Int("holding-days", 5, "Maximum holding period in trading days, including entry day")
+	model := flag.String("probability-model", "gbm", "Probability model: gbm (Off), vwap_reversion_auto (Auto), vwap_reversion (Manual)")
+	halfLife := flag.Float64("reversion-half-life", 5, "VWAP reversion half-life in trading days (only for vwap_reversion)")
+	vwapWindow := flag.Int("vwap-window", 20, "Daily rolling VWAP window: 2 to 252 trading days")
+	days := flag.Int("days", 7, "Completed calendar days to request")
+	flag.Parse()
+	if *timeframe == "1Min" && !backtest.MinuteExecutionEnabled {
+		log.Fatal("minute execution is temporarily disabled pending disk-backed histories and bounded replay; use -timeframe 1Day")
+	}
+	if *days < 1 || (*timeframe != "1Min" && *timeframe != "1Day") {
+		log.Fatal("use positive days and timeframe 1Min or 1Day")
+	}
 	fmt.Println("Historical backtest started")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -32,11 +46,22 @@ func main() {
 		log.Fatal(err)
 	}
 
+	loc, _ := time.LoadLocation("America/New_York")
+	start = end.In(loc).Add(time.Second).AddDate(0, 0, -*days).UTC()
 	service, err := backtest.NewService(marketdata.NewClient(), backtest.Credentials{AlpacaKey: os.Getenv("ALPACA_API_KEY"), AlpacaSecret: os.Getenv("ALPACA_API_SECRET"), FREDKey: os.Getenv("FRED_API_KEY")}, backtest.DefaultServiceSettings())
 	if err != nil {
 		log.Fatal(err)
 	}
-	output, err := service.Run(context.Background(), backtest.RunRequest{InitialCapital: 50000, Allocations: allocations, Start: start, End: end})
+	dailyWindow := 0
+	if *timeframe == "1Day" {
+		dailyWindow = *vwapWindow
+	}
+	output, err := service.Run(context.Background(), backtest.RunRequest{HoldingDays: *holdingDays, ProbabilityModel: *model, ReversionHalfLifeDays: func() float64 {
+		if *model == "vwap_reversion" {
+			return *halfLife
+		}
+		return 0
+	}(), DailyVWAPWindow: dailyWindow, Timeframe: *timeframe, InitialCapital: 50000, Allocations: allocations, Start: start, End: end})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,7 +70,7 @@ func main() {
 	for _, snapshot := range result.Snapshots {
 		fmt.Printf(
 			"\n%s %s close=%.2f vwap=%.2f lower=%.2f upper=%.2f signal=%s",
-			snapshot.Timestamp.Format("2006-01-02"),
+			snapshot.Timestamp.In(loc).Format("2006-01-02 15:04 MST"),
 			snapshot.Bar.Symbol,
 			snapshot.Bar.Close,
 			snapshot.Indicator.VWAP,
@@ -54,8 +79,15 @@ func main() {
 			snapshot.Signal.Action,
 		)
 
-		if snapshot.FilledOrder != nil {
-			order := snapshot.FilledOrder
+		fmt.Printf(" reason=%s execution=%s EMA20=%.2f", snapshot.DecisionReason, snapshot.ExecutionReason, snapshot.Indicator.EMA)
+		if snapshot.Risk != nil {
+			fmt.Printf(" win=%.4f loss=%.4f timeout=%.4f Kelly=%.4f", snapshot.Risk.WinProbability, snapshot.Risk.LossProbability, snapshot.Risk.TimeoutProbability, snapshot.Risk.KellyFraction)
+		}
+		fills := snapshot.FilledOrders
+		if len(fills) == 0 && snapshot.FilledOrder != nil {
+			fills = append(fills, *snapshot.FilledOrder)
+		}
+		for _, order := range fills {
 
 			fmt.Printf(
 				"\n===> FILLED order id=%s action=%s quantity=%.2f filled_price=%.2f",

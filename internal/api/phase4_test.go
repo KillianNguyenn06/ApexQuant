@@ -120,9 +120,9 @@ func TestPhase4ReplayValuesAccountingAndAvailability(t *testing.T) {
 						if string(gotJSON) != string(wantJSON) {
 							t.Fatal("stream changed a completed snapshot")
 						}
-						if fill := s.FilledOrder; fill != nil {
+						for _, fill := range s.FilledOrders {
 							order := pending[symbol]
-							if order == nil || order.ID != fill.ID || order.CreatedAt.UTC().Format(time.DateOnly) >= date || fill.FilledPrice == nil || *fill.FilledPrice != s.Bar.Open {
+							if fill.FilledPrice == nil || (fill.Action == "buy" && (order == nil || order.ID != fill.ID || order.CreatedAt.UTC().Format(time.DateOnly) >= date || *fill.FilledPrice != s.Bar.Open)) {
 								t.Fatal("next-open order guarantee changed in replay")
 							}
 							if fill.Action == "buy" {
@@ -130,6 +130,9 @@ func TestPhase4ReplayValuesAccountingAndAvailability(t *testing.T) {
 								quantities[symbol] += fill.Quantity
 								buys++
 							} else {
+								if !fill.CreatedAt.Equal(s.Timestamp) || *fill.FilledPrice < s.Bar.Low || *fill.FilledPrice > s.Bar.High || fill.Quantity > quantities[symbol]+1e-8 {
+									t.Fatal("invalid protective sell on stream")
+								}
 								cash += fill.Quantity * *fill.FilledPrice
 								quantities[symbol] -= fill.Quantity
 								sells++

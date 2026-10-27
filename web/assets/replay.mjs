@@ -111,9 +111,10 @@ export class ReplayModel {
       case 'portfolio': {
         if (this.pending !== n || data.day_index !== day) throw invalid();
         const snapshots = this.result.snapshots.slice(base, base + n);
-        const date = new Date(snapshots[0].timestamp).toISOString().slice(0, 10);
+        const key = value => this.result.data.timeframe === '1Min' ? new Date(value).toISOString().replace('.000Z', 'Z') : new Date(value).toISOString().slice(0, 10);
+        const date = key(snapshots[0].timestamp);
         const positions = Object.fromEntries(snapshots.map(s => [s.bar.symbol, s.position]));
-        if (snapshots.some((s, i) => s.bar.symbol !== this.symbols[i] || new Date(s.timestamp).toISOString().slice(0, 10) !== date || !equal(s.account, data.account)) || (day && date <= this.frames[day - 1].date) || data.date !== date || !equal(data.positions, positions)) throw invalid();
+        if (snapshots.some((s, i) => s.bar.symbol !== this.symbols[i] || key(s.timestamp) !== date || !equal(s.account, data.account)) || (day && date <= this.frames[day - 1].date) || data.date !== date || !equal(data.positions, positions)) throw invalid();
         this.frames.push({ date, snapshots, account: snapshots[0].account, positions });
         this.pending = 0; this.cursor = Number(event.id); break;
       }

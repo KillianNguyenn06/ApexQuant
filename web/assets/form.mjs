@@ -14,7 +14,15 @@ export function shiftDate(value, days) {
 
 export function validateForm(input, limits) {
   const errors = {};
+  const holding = input.holding_days === undefined ? undefined : Number(input.holding_days);
+  const model = input.probability_model;
+  const halfLife = input.reversion_half_life_days === undefined ? 5 : Number(input.reversion_half_life_days);
+  if (holding !== undefined && (!Number.isInteger(holding) || holding < 1 || holding > 252)) errors.holding_days = 'Choose 1–252 trading days.';
+  if (model !== undefined && !['gbm', 'vwap_reversion_auto', 'vwap_reversion'].includes(model)) errors.probability_model = 'Choose a supported simulation model.';
+  if (model === 'vwap_reversion' && (!Number.isFinite(halfLife) || halfLife <= 0 || halfLife > 252)) errors.reversion_half_life_days = 'Choose a positive half-life up to 252 trading days.';
   const capital = Number(input.initial_capital);
+  const window = input.vwap_window === undefined ? undefined : Number(input.vwap_window);
+  if (input.timeframe !== "1Min" && window !== undefined && (!Number.isInteger(window) || window < 2 || window > 252)) errors.vwap_window = "Choose 2–252 trading days for daily VWAP.";
   if (!Number.isFinite(capital) || capital <= 0) errors.initial_capital = 'Enter starting capital greater than zero.';
   const allocations = (input.allocations ?? []).map(row => ({ symbol: String(row.symbol ?? '').trim().toUpperCase(), percent: Number(row.percent) }));
   if (allocations.length < 1 || allocations.length > limits.max_symbols) errors.allocations = `Choose 1–${limits.max_symbols} stocks.`;
@@ -34,9 +42,9 @@ export function validateForm(input, limits) {
   else if (input.end_date > limits.latest_end_date) errors.end_date = `Choose a completed day on or before ${limits.latest_end_date}.`;
   if (Number.isFinite(start) && Number.isFinite(end)) {
     const days = (end - start) / DAY + 1;
-    if (days < 2) errors.end_date = 'End date must be after the start date.';
+    if (days < (input.timeframe === '1Min' ? 1 : 2)) errors.end_date = 'End date must be after the start date.';
     else if (days > limits.max_range_days) errors.end_date = `This server supports up to ${limits.max_range_days} calendar days per run.`;
-    else if (days * allocations.length > limits.max_snapshots) errors.allocations ??= 'Use fewer stocks or a shorter period for this server.';
+    else if (days * allocations.length * (input.timeframe === '1Min' ? 390 : 1) > limits.max_snapshots) errors.allocations ??= `This selection exceeds the server’s ${limits.max_snapshots.toLocaleString()}-snapshot limit. Shorten the period, use fewer stocks, or choose daily execution.`;
   }
-  return { errors, total, request: { initial_capital: capital, allocations, start_date: input.start_date, end_date: input.end_date } };
+  return { errors, total, request: { ...(holding !== undefined ? {holding_days: holding} : {}), ...(model ? {probability_model: model} : {}), ...(model === "vwap_reversion" ? {reversion_half_life_days: halfLife} : {}), ...(input.timeframe !== "1Min" && window !== undefined ? {vwap_window: window} : {}), ...(input.timeframe ? { timeframe: input.timeframe } : {}), initial_capital: capital, allocations, start_date: input.start_date, end_date: input.end_date } };
 }

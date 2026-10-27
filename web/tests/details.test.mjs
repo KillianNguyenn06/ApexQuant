@@ -39,7 +39,7 @@ test('rewinding and resetting remove later activity without changing saved sourc
   detailsAt(model,2); const back=detailsAt(model,0);
   assert.equal(back.orders[0].status,'submitted'); assert.equal(back.events.length,3);
   assert.equal(JSON.stringify(model.result),original);
-  assert.deepEqual(detailsAt(null,0),{date:null,account:null,positions:[],orders:[],events:[]});
+  assert.deepEqual(detailsAt(null,0),{date:null,account:null,positions:[],orders:[],events:[],tradeAudit:null});
 });
 test('pagination bounds DOM rows and retains every event across pages', () => {
   const values=Array.from({length:47},(_,i)=>i);
@@ -53,8 +53,19 @@ test('configuration is an allowlist and does not imply seed-zero reproducibility
   const values=Object.fromEntries(runConfiguration(result));
   assert.equal(values['Seed'],'Randomized · realized seed not recorded');
   assert.equal(values['Fallback volatility (%)'],20); assert.equal(values['Rate observation date'],'Unavailable');
-  assert.equal(values['Risk-free rate (%)'],4);
+  assert.equal(values['Initial/fixed risk-free rate (%)'],4);
   assert.equal(JSON.stringify(values).includes('SECRET'),false);
   assert.equal(values['Target allocation'],'AAPL 60% · MSFT 40%');
   assert.deepEqual(runConfiguration(null),[]);
+});
+
+
+test('daily decision audit counts opportunities separately from submissions and fills, and rewinds', () => {
+  const { result, events } = fixture(), model = new ReplayModel(result); events.forEach(e => model.accept(e));
+  model.frames[2].snapshots[0].signal.action = 'buy';
+  model.frames[2].snapshots[0].decision_reason = 'buy_rejected_kelly';
+  model.frames[2].snapshots[0].risk = { win_probability: 0, loss_probability: 1, timeout_probability: 0, kelly_fraction: 0, quantity: 0 };
+  assert.deepEqual(detailsAt(model, 2).tradeAudit, { opportunities: 3, submitted: 1, buys: 1, sells: 0, blocked: 1 });
+  assert.deepEqual(detailsAt(model, 0).tradeAudit, { opportunities: 2, submitted: 1, buys: 0, sells: 0, blocked: 0 });
+  assert.equal(detailsAt(model, -1).tradeAudit, null);
 });

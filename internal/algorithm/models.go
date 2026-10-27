@@ -9,6 +9,10 @@ import (
 )
 
 type Indicator struct {
+	EMA               float64 `json:"ema"`
+	EMASlope          float64 `json:"ema_slope"`
+	EMAReady          bool    `json:"ema_ready"`
+	VolumeReady       bool    `json:"volume_ready"`
 	VWAP              float64 `json:"vwap"`
 	StandardDeviation float64 `json:"standard_deviation"`
 	UpperBand         float64 `json:"upper_band"`

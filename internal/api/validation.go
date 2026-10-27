@@ -66,6 +66,21 @@ func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time)
 	if len(request.Allocations) < 1 || len(request.Allocations) > MaxSymbols {
 		return invalid("invalid_allocations", "Select between 1 and 8 symbols.", "allocations")
 	}
+	if request.Timeframe != "" && request.Timeframe != "1Day" && request.Timeframe != "1Min" {
+		return invalid("invalid_timeframe", "Choose 1Min or 1Day execution bars.", "timeframe")
+	}
+	if request.VWAPWindow != 0 && (request.Timeframe == "1Min" || request.VWAPWindow < 2 || request.VWAPWindow > 252) {
+		return invalid("invalid_vwap_window", "Daily VWAP window must be 2 to 252 trading days and applies only to daily execution.", "vwap_window")
+	}
+	if request.HoldingDays < 0 || request.HoldingDays > 252 {
+		return invalid("invalid_holding_days", "Choose 1 to 252 trading days.", "holding_days")
+	}
+	if request.ProbabilityModel != "" && request.ProbabilityModel != "gbm" && request.ProbabilityModel != "vwap_reversion" && request.ProbabilityModel != "vwap_reversion_auto" {
+		return invalid("invalid_model", "Choose Off, Auto, or Manual mean reversion.", "probability_model")
+	}
+	if !finite(request.ReversionHalfLifeDays) || request.ReversionHalfLifeDays < 0 || request.ReversionHalfLifeDays > 252 || (request.ProbabilityModel != "vwap_reversion" && request.ReversionHalfLifeDays != 0) {
+		return invalid("invalid_half_life", "Half-life must be positive and at most 252 trading days for VWAP mean reversion.", "reversion_half_life_days")
+	}
 	normalized := request
 	normalized.Allocations = make([]Allocation, len(request.Allocations))
 	allocations := make([]session.PortfolioAllocation, len(request.Allocations))
@@ -111,7 +126,7 @@ func ValidateCreateBacktestRequest(request CreateBacktestRequest, now time.Time)
 	if err != nil {
 		return invalid("invalid_dates", "Use a valid YYYY-MM-DD end date.", "end_date")
 	}
-	if !start.Before(last) {
+	if start.After(last) || (start.Equal(last) && request.Timeframe != "1Min") {
 		return invalid("invalid_dates", "Start date must precede end date.", "end_date")
 	}
 	end := last.AddDate(0, 0, 1).Add(-time.Second)
@@ -142,10 +157,16 @@ func ValidateRequestLimits(request ValidatedRequest, maxRangeDays, maxSnapshots 
 		return &APIError{Code: "invalid_dates", Message: "Invalid end date.", Field: "end_date"}
 	}
 	days := int((end.Unix()-start.Unix())/86400) + 1
-	if days < 2 || days > maxRangeDays {
-		return &APIError{Code: "workload_limit", Message: fmt.Sprintf("Date range must contain 2 to %d calendar days.", maxRangeDays), Field: "end_date"}
+	minimum := 2
+	multiplier := 1
+	if request.Request.Timeframe == "1Min" {
+		minimum = 1
+		multiplier = 390
 	}
-	if len(request.Allocations) < 1 || days > maxSnapshots/len(request.Allocations) {
+	if days < minimum || days > maxRangeDays {
+		return &APIError{Code: "workload_limit", Message: fmt.Sprintf("Date range must contain %d to %d calendar days.", minimum, maxRangeDays), Field: "end_date"}
+	}
+	if len(request.Allocations) < 1 || days > maxSnapshots/len(request.Allocations)/multiplier {
 		return &APIError{Code: "workload_limit", Message: "Requested symbols and dates exceed the configured snapshot budget.", Field: "allocations"}
 	}
 	return nil

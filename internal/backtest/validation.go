@@ -6,9 +6,33 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 )
 
 func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error) {
+	if config.HoldingDays < 0 || config.HoldingDays > 252 {
+		return nil, fmt.Errorf("holding days must be 1 to 252, or omitted")
+	}
+	m := config.MonteCarloInput
+	if m.Model == "vwap_reversion_auto" && (config.Timeframe == "1Min" || m.ReversionHalfLifeDays != 0) {
+		return nil, fmt.Errorf("auto reversion requires daily bars and no manual override")
+	}
+	if m.Model != "" && m.Model != "gbm" && m.Model != "vwap_reversion" && m.Model != "vwap_reversion_auto" {
+		return nil, fmt.Errorf("unknown probability model")
+	}
+	if math.IsNaN(m.ReversionHalfLifeDays) || math.IsInf(m.ReversionHalfLifeDays, 0) || m.ReversionHalfLifeDays < 0 || m.ReversionHalfLifeDays > 252 || (m.Model == "vwap_reversion" && m.ReversionHalfLifeDays <= 0) {
+		return nil, fmt.Errorf("invalid reversion half life")
+	}
+	for _, r := range config.RiskFreeRates {
+		date, e1 := time.Parse(time.DateOnly, r.Date)
+		available, e2 := time.Parse(time.DateOnly, r.AvailableDate)
+		if e1 != nil || e2 != nil || !available.After(date) || math.IsNaN(r.Rate) || math.IsInf(r.Rate, 0) {
+			return nil, fmt.Errorf("invalid historical rate")
+		}
+	}
+	if config.DailyVWAPWindow != 0 && (config.Timeframe == "1Min" || config.DailyVWAPWindow < 2 || config.DailyVWAPWindow > 252) {
+		return nil, fmt.Errorf("daily VWAP window must be 2 to 252 trading bars and applies only to daily execution")
+	}
 	for _, value := range []float64{config.InitialAccount.Cash, config.InitialAccount.Equity, config.InitialAccount.BuyingPower, config.PeriodsPerYear, config.MonteCarloInput.TimeHorizon, config.MonteCarloInput.Volatility, config.MonteCarloInput.RiskFreeRate} {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return nil, fmt.Errorf("configuration values must be finite")
@@ -71,11 +95,15 @@ func validateConfig(config BacktestConfig) ([]session.PortfolioAllocation, error
 			return nil, fmt.Errorf("%s requires at least two bars", allocation.Symbol)
 		}
 
-		if err := marketdata.ValidateBars(allocation.Symbol, bars); err != nil {
+		if err := marketdata.ValidateBarsTimeframe(allocation.Symbol, bars, config.Timeframe); err != nil {
 			return nil, err
 		}
 		history := config.VolatilityHistory[allocation.Symbol]
-		if len(history) > config.VolatilityWindow {
+		historyLimit := config.VolatilityWindow
+		if m.Model == "vwap_reversion_auto" {
+			historyLimit = 253 + DailyVWAPWindowSize(config)
+		}
+		if len(history) > historyLimit {
 			return nil, fmt.Errorf("too many volatility history bars for %s", allocation.Symbol)
 		}
 		if len(history) > 0 {

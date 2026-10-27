@@ -28,7 +28,7 @@ func DefaultReplayOptions() ReplayOptions {
 }
 
 func (o ReplayOptions) valid() bool {
-	return o.MaxConnections > 0 && o.MaxBytes > 0 && o.MaxBytes <= 1<<30 && o.WriteTimeout > 0 && o.MaxDuration > 0
+	return o.MaxConnections > 0 && o.MaxBytes > 0 && o.MaxBytes <= 64<<30 && o.WriteTimeout > 0 && o.MaxDuration > 0
 }
 
 func parseReplayRequest(r *http.Request) (time.Duration, int, error) {

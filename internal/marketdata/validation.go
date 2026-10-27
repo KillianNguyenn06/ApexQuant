@@ -9,6 +9,16 @@ import (
 // ValidateBars validates one daily series without sorting, dropping, or repairing data.
 // Zero-volume bars may have zero VWAP; they contribute no weight to indicators.
 func ValidateBars(symbol string, bars []BarTick) error {
+	return ValidateBarsTimeframe(symbol, bars, "1Day")
+}
+
+func ValidateBarsTimeframe(symbol string, bars []BarTick, timeframe string) error {
+	if timeframe == "" {
+		timeframe = "1Day"
+	}
+	if timeframe != "1Day" && timeframe != "1Min" {
+		return fmt.Errorf("unsupported timeframe")
+	}
 	if !validTicker.MatchString(symbol) {
 		return fmt.Errorf("invalid symbol %q", symbol)
 	}
@@ -22,6 +32,12 @@ func ValidateBars(symbol string, bars []BarTick) error {
 			return fail()
 		}
 		date := b.Timestamp.UTC().Format(time.DateOnly)
+		if timeframe == "1Min" {
+			if b.Timestamp.Second() != 0 || b.Timestamp.Nanosecond() != 0 {
+				return fail()
+			}
+			date = b.Timestamp.UTC().Format(time.RFC3339)
+		}
 		if date <= previous {
 			return fmt.Errorf("%s bar %d has duplicate or unordered date", symbol, i)
 		}

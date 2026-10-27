@@ -2,7 +2,7 @@
 
 ApexQuant is a Go-based multi-stock portfolio backtesting application.
 
-Users select between 1 and 8 stock symbols, assign each stock a percentage of the portfolio, and run a one-year historical backtest using daily market data.
+Users select between 1 and 8 stock symbols, assign each stock a percentage of the portfolio, and run historical backtests using daily market data. The dashboard supports date presets and custom ranges; the terminal defaults to the last seven completed calendar days. Minute execution is temporarily disabled pending long-history storage and performance work.
 
 The application calculates indicators, generates trading signals, sizes positions using Monte Carlo simulation and Kelly-based risk management, and tracks orders, positions, cash, buying power, and portfolio equity.
 
@@ -12,20 +12,22 @@ The application calculates indicators, generates trading signals, sizes position
 
 - User-selected portfolio of 1–8 stocks.
 - Portfolio allocations totaling 100%.
-- One year of daily historical bars from Alpaca.
-- Risk-free rate from FRED.
+- Daily historical bars from Alpaca; minute execution code is retained but disabled.
+- Historical risk-free-rate vintages from FRED, selected by decision date.
 - Independent state for every stock.
-- Volume-weighted average price (VWAP).
-- VWAP standard-deviation bands.
+- Rolling volume-weighted average price (VWAP), with a configurable daily window.
+- VWAP standard-deviation bands over the same window.
 - Buy, Sell, and Hold signals.
 - Annualized historical volatility.
-- Geometric Brownian Motion Monte Carlo simulation.
-- Kelly-based position sizing.
+- Monte Carlo simulation with plain Geometric Brownian Motion or Auto/Manual
+  VWAP mean reversion using log-price Ornstein-Uhlenbeck dynamics.
+- Fractional Kelly sizing using target, stop and timeout payoffs.
 - Cash, buying-power, and allocation limits.
-- Orders submitted at the current close.
-- Pending orders filled at the next available open.
+- Entry orders submitted at the current close and filled at the next available open.
+- Protective OHLC exits and a shared simulation/execution holding deadline.
 - Portfolio-wide equity calculation.
-- Submitted and filled-order snapshots.
+- Submitted and filled-order snapshots with decision and rejection diagnostics.
+- Interactive dashboard and synchronized historical SSE replay.
 - Unit tests for algorithms, risk, simulation, broker, and session logic.
 
 ## Backtest Flow
@@ -35,15 +37,15 @@ For each historical trading day, ApexQuant performs the following sequence:
 ```text
 1. Update every stock to its opening price
 2. Calculate opening portfolio equity
-3. Fill orders submitted on the previous bar
-4. Update every stock to its closing price
-5. Calculate closing portfolio equity
-6. Update VWAP and standard-deviation bands
-7. Generate Buy, Sell, or Hold signals
-8. Calculate Monte Carlo probabilities
-9. Apply Kelly and portfolio risk limits
-10. Submit new orders
-11. Save a backtest snapshot
+3. Settle pending entries from the previous bar
+4. Process protective and holding-deadline exits
+5. Update every stock to its closing price and calculate closing portfolio equity
+6. Update rolling VWAP/bands, volatility and the available historical rate
+7. Detect eligible Buy opportunities or record Hold/Sell reasons
+8. Simulate eligible opportunities using the selected model
+9. Apply timeout-aware Kelly sizing and portfolio risk limits
+10. Submit next-open entry orders
+11. Record snapshots for results and replay
 ```
 
 The final historical bar may fill an existing pending order, but it cannot submit a new order because no future bar exists to fill it.
@@ -57,25 +59,33 @@ A Buy signal is generated when:
 ```text
 No position is currently open
 Standard deviation is greater than zero
-Current price is at or below the VWAP lower band
+Today's low is at/below the previous completed lower band,
+  OR today's close is at/below the current completed lower band
+No exit has already occurred in this bar
 ```
 
 The initial risk levels are:
 
 ```text
-Entry       = current price
-Stop loss   = entry price - standard deviation
+Entry       = signal close (actual entry fills at the next available open)
+Stop loss   = signal close - standard deviation
 Take profit = VWAP + 0.5 × standard deviation
 ```
 
 ### Sell Signal
 
-A Sell signal is generated when an open position reaches either:
+A protective exit checks opening gaps first, then the daily low/high:
 
 ```text
-Current price <= stop-loss price
-Current price >= take-profit price
+Opening price crosses stop/target -> exit at the opening price
+Daily low <= stop-loss price      -> exit at the stop
+Daily high >= take-profit price   -> exit at the target
 ```
+
+If both boundaries touch, the stop takes priority. The configured holding period
+defaults to five trading bars including entry day; absent a protective exit, the
+position exits at the deadline close. Zero volume can delay execution. No same-bar
+reentry occurs. An entry opportunity is not a guaranteed submission or fill.
 
 ### Position Sizing
 
@@ -417,16 +427,19 @@ provider run was required for these UI checks.
 Before trading starts, the shared service fetches earlier daily prices to prepare
 each stock's volatility estimate. With the default 20-bar window, the request
 extends 54 calendar days before the selected start to allow for weekends and
-holidays, and retains only the latest 20 earlier bars per stock. This is a bounded
-history request, not a guarantee that every symbol has 20 available bars.
+holidays, and retains the latest 20 earlier bars per stock in Off/Manual mode.
+Auto requests additional pre-run history for its regression: up to 252 transitions
+plus the selected VWAP window. This is a bounded history request, not a guarantee
+that every symbol has enough available bars.
 
 At each trading day's close, volatility uses the latest available bars through
 that close, up to the configured window. It is the sample standard deviation of
 daily log returns multiplied by the square root of 252 (by default). Earlier
 preparation bars roll out as trading bars arrive. Future prices are never used.
 
-Preparation bars do not create trades, change starting capital, initialize VWAP
-or bands, or appear in result snapshots or replay events. If fewer than three
+Preparation bars do not create trades, change starting capital, initialize the
+trading-run VWAP/bands, or appear in result snapshots or replay events. Auto uses
+them separately to calculate historical calibration VWAPs. If fewer than three
 total bars are available, the configured fallback volatility (20% by default)
 still applies until an estimate can be calculated. `initial_volatility` in API
 settings continues to describe that fallback, not each stock's rolling estimate.
@@ -451,6 +464,7 @@ preparation data from trading and replay data.
 - Five-minute historical bars.
 - Further market-data expansion.
 - Split and dividend adjustments.
+- Fully or Partial sell Order. 
 - Trading fees and slippage.
 - Saved backtest results.
 - Expand date presets and verify longer runs against live provider history.
@@ -463,12 +477,39 @@ preparation data from trading and replay data.
   verify numerical correctness, reproducibility, and measured performance against
   the Go implementation before replacing the core.
 
+## Intraday execution and chart intervals
+
+The dashboard defaults to **daily execution**, $50,000 and AAPL/NVDA allocations of 50% each. The terminal uses the same service:
+
+```bash
+go run ./cmd/backtest -timeframe 1Min -days 7
+# Legacy daily comparison:
+go run ./cmd/backtest -timeframe 1Day -days 365
+```
+
+API requests currently accept `"timeframe": "1Day"` or omission. `"1Min"` requests are rejected with `minute_execution_disabled` before queueing or fetching data. Minute implementation and tests are retained for future use. The calendar limit remains 3,660 days, with a default budget of 29,280 estimated snapshots. Minute requests count 390 bars per calendar date per symbol, so their default range is shorter (for example, 25 calendar dates for three stocks). Daily execution supports the full ten-year range for eight stocks. Explicit server overrides can increase these limits, but are not a guarantee that a run will fit memory. Results and replay history remain in memory: defaults allow 64 MiB per result, 256 MiB retained results and 128 MiB for each replay source/timeline budget. Replay connection and result-retention limits remain three hours.
+
+Minute execution is temporarily disabled in the dashboard, CLI and API/service. The retained minute engine uses the following explicit rules (for development tests, not currently available runs):
+
+- VWAP and its volume-weighted bands reset each New York calendar session. They accumulate the provider's minute VWAPs; the band variance is between minute VWAPs, not reconstructed tick variance. EMA20 uses minute closes, continues between sessions, and is marked as warming for the first 19 bars. EMA slope describes momentum; it never vetoes a dip buy.
+- When flat, a close at/below the current lower band or a low touching/crossing the **previous completed minute's** lower band produces a Buy opportunity. Current-bar lows are not compared with a boundary that was unknown during that bar. A recovered close that leaves no positive target distance is explicitly rejected. There is no new breakout-buy rule.
+- Signals are evaluated after a completed minute. Eligible buys fill at the following consecutive minute's open, subject to cash, buying power and allocation caps. One pending entry per symbol; no pyramiding. Stops and targets retain their signal-time distances relative to the actual entry fill. Pending entries expire on a missing/zero-volume next minute or a new session.
+- Held positions have protective exits active independently of Kelly. Exact stop/target touches count. Opening gaps execute at the observed open. When both levels occur inside a minute with the open between them, stop-first is the conservative assumption. An entry at the open can be stopped/targeted within that same minute. Both fills are retained; there is no same-minute reentry after an exit.
+- Final bars cannot submit a new order. The 15:59 bar cannot submit an overnight entry. Open positions may carry overnight; they are marked at the end rather than forcibly liquidated. Zero-volume bars cannot execute orders. Missing or mismatched minute timestamps across stocks reject the run explicitly instead of inventing bars.
+- GBM volatility uses up to 20 **completed earlier daily bars**, annualized with 252 periods/year. It does not substitute 20 minutes for 20 days or use the current session's future daily close. The five-day horizon still means five trading days, not five minutes. Kelly retains its 0.2 multiplier and all funding/allocation caps.
+
+In the dashboard, **1 minute / 5 minutes / 1 day** changes candle display only. It aggregates the received replay prefix, preserves all fill markers, and samples the same minute VWAP/EMA at each displayed candle's end. Switching chart intervals never changes orders. Legacy daily data cannot be expanded into genuine minute candles.
+
+Minute snapshots add `filled_orders`, `order_events`, `decision_reason`, `execution_reason` and, when sizing is evaluated, `risk` probabilities/Kelly/quantity. `filled_order` remains a compatibility alias for the last fill. The event table and terminal explain sizing rejections instead of silently presenting only Hold. Signals and submitted orders remain distinct from fills.
+
+These are historical simulation assumptions, not broker execution guarantees. The trading window is fixed at 09:30–16:00 New York; an exchange early-close calendar is not yet applied. Minute OHLC cannot reveal tick order or the exact instant of an intraminute fill. Next-open entry assumes zero processing latency; fees, spread, queue position and slippage remain unmodeled. [Alpaca labels minute bars by their start time](https://alpaca.markets/learn/stock-minute-bars); signal timestamps therefore advance by one minute. No profitability improvement is claimed from these correctness changes.
+
 ## Known Limitations
 
 - The application supports a terminal runner and a local HTTP API.
-- Historical bars are currently daily bars.
-- Symbols must return matching trading dates.
-- Alpaca SIP daily bars are paginated; empty, malformed, and inconsistent series are rejected.
+- Historical execution supports one-minute bars and legacy daily bars.
+- Symbols must return matching timestamps for minute runs, or matching dates for daily runs.
+- Alpaca SIP bars are paginated; empty, malformed, and inconsistent series are rejected.
 - Market data currently uses raw price adjustment.
 - The current risk-free rate is applied across the backtest.
 - Seed 0 uses time-based randomness; nonzero seeds support repeatable simulations.
@@ -476,7 +517,7 @@ preparation data from trading and replay data.
 - Backtest results are not yet persisted.
 - The SSE stream replays completed results; it does not show live calculation progress.
 - Saved-run history, names/notes and durable storage are not yet implemented.
-- Replay data advances by complete trading days; visual smoothing does not provide intraday prices.
+- Replay advances only after all stocks at the current execution bar are received. Display aggregation does not create finer data.
 
 ## Disclaimer
 
@@ -498,7 +539,9 @@ symbols normalize before duplicate checks; bars remain keyed by canonical symbol
 Initial accounts represent cash-only starts (equity equals cash); non-finite
 configuration values are rejected. Matching multi-symbol dates remain mandatory.
 
-Verified real-data run: September 5, 2025 through September 4, 2026, AAPL/MSFT at
+Historical Phase 2 verification (before the later daily-strategy/model changes;
+these are not current-model benchmark results): September 5, 2025 through
+September 4, 2026, AAPL/MSFT at
 50% each, $50,000 initial cash, 100,000 Monte Carlo paths, 252 steps, seed 42.
 Each symbol returned 252 SIP daily bars. FRED returned 3.89% (September 3, 2026).
 The run produced 504 snapshots, two buy fills, two sell fills, and 390 Hold
@@ -519,10 +562,10 @@ may revise history; a fixed seed controls simulation randomness, not revisions.
 The application does not automatically load `.env`; descriptive colon-separated
 key notes are not shell environment assignments. Never commit credentials.
 
-This verification establishes input and accounting correctness for the tested
-run, not strategy profitability. Fees, slippage, corporate-action treatment,
-historical risk-free-rate curves, and Monte Carlo concurrency optimization remain
-future work. HTTP/SSE/UI are not implemented by Phase 2.
+This verification establishes input and accounting correctness for that tested
+version, not strategy profitability. Fees, slippage and corporate-action treatment
+remain future work. Later phases added HTTP/SSE/UI, historical rate vintages,
+and Go simulation optimizations; see the current model sections below.
 
 ## Phase 3 progress
 
@@ -556,9 +599,9 @@ curl -i http://127.0.0.1:8080/api/backtests \
 
 Use the returned ID to query `/api/backtests/{id}` and, after completion,
 `/api/backtests/{id}/result`. A request disconnect does not cancel an admitted job.
-Jobs and results are lost on process restart. The service uses one FRED rate as of
-the requested New York calendar end date across the simulation; it does not yet model a historical
-rate curve or vintage publication availability.
+Jobs and results are lost on process restart. The production service batches FRED
+historical vintages and selects the available rate at each decision date. Legacy
+providers exposing only a single-rate method use a fixed rate from before the run.
 
 Default protection settings:
 
@@ -568,7 +611,7 @@ Default protection settings:
 | Request body / headers | 16 KiB / 16 KiB |
 | Simultaneous HTTP handlers | 16 |
 | Requested range | 3,660 calendar days (roughly ten years) |
-| Estimated snapshots | 29,280 (calendar days times symbols) |
+| Estimated snapshots | 29,280 (minute requests count 390 bars per date per symbol) |
 | Shared request bucket | 120/minute refill, burst 30 |
 | Shared submission bucket | 6/minute refill, burst 2 |
 | Finished records / retention | 20 / 3 hours after completion |
@@ -668,3 +711,97 @@ concurrent stream admission and capacity recovery, and fresh connection deadline
 The three-hour lifetime and retention checks use controlled timestamps rather
 than waiting three hours. The full race suite passed with 93.4% API statement
 coverage; static analysis and both server and CLI builds also passed.
+
+Market View offers 1-minute, 5-minute and daily display candles for minute executions, independently of the trading interval. Use − / + to show more/fewer candles or All to fit the received history. Daily execution offers daily candles only; it cannot reconstruct minute prices. Your portfolio includes a recent equity mini-chart alongside the stock-card charts.
+
+Daily execution now uses **rolling VWAP and bands**, defaulting to the latest 20 observed trading days within the requested run. The same window supplies the volume-weighted mean and dispersion of daily bar VWAPs. Early bars use the available prefix; zero-volume bars occupy a day in the window but add no weight. This is not reconstructed tick-level variance. Older observations drop out as the window advances, allowing bands to follow a sustained change in price range.
+
+Set **Daily VWAP window** (2–252 trading days) in Backtest Settings when using daily execution, send `"vwap_window":60` in a daily API request, or use `go run ./cmd/backtest -timeframe 1Day -days 365 -vwap-window 60`. Omission uses 20. Minute execution retains session VWAP and does not accept a daily window. The returned `settings.daily_vwap_window` records the effective daily setting. Existing saved results without this field retain their legacy indicator interpretation.
+
+Entry touches use the previous completed day's band; the current completed daily window supplies close-based entry eligibility and signal-time stop/target distances. Entries still fill next open. Protective exits, no same-bar reentry, and cash/allocation/Kelly gates are unchanged. No breakout-buy rule or profitability improvement is implied. Daily bands are calculated only from bars up to the displayed day.
+
+Minute execution is paused until disk-backed histories, bounded processing/replay and performance measurements can support long runs. A local SQLite database is a proposed storage option; it is not implemented. Increasing memory ceilings alone is insufficient. Daily execution, including rolling VWAP, remains available.
+
+
+### Model/execution consistency
+
+Daily runs now share a maximum holding period with simulation: `holding_days`
+(default 5; 1–252 trading bars, including the actual entry day). Stop/target
+exits take priority; otherwise the deadline exits at that day's close. With no
+volume, an overdue exit waits for an executable bar and uses its open (opening protective gaps keep their reason; later
+wicks cannot precede that open exit). No reentry occurs on an exit bar. If the data
+ends before the deadline, the remaining position is marked at the final close;
+that truncated trade has not completed the modeled horizon.
+
+The dashboard Settings and CLI `-holding-days` expose the period. Simulation
+uses 252 trading days/year, dividing its step budget into equal daily groups
+(the effective step count rounds up to a multiple of holding days). Each group
+forms a synthetic OHLC bar using sampled prices, with the same stop-first
+convention as daily execution. This finite grid can miss between-sample touches;
+simulated paths do not model overnight gaps or transaction costs. Entry forecasts
+are conditional on the signal price; actual next-open gaps remain a modeling
+limitation even though execution reanchors stop/target distances at the fill.
+
+Every simulation path retains a payoff in units of planned stop risk, including
+terminal profit/loss when neither barrier hits. Kelly maximizes empirical mean
+log wealth over all these outcomes, then the existing 0.2 sizing multiplier and
+cash/allocation caps apply. Barrier-win probability is not total probability of
+positive return: profitable timeouts remain classified as timeouts. Raw samples
+are transient and are not sent to the dashboard. Diagnostics retain the timeout
+mean return and actual decision rate/model.
+
+The default probability model remains `gbm` (risk-free drift, no VWAP recovery
+assumption). Optional `vwap_reversion` models log price with an OU pull toward
+VWAP fixed at the signal. Its manual `reversion_half_life_days` defaults to 5
+and must be positive and at most 252. The pull and risk-free log drift are
+separate terms; a half-life describes decay of distance without drift/noise.
+This is an explicit model assumption, not calibrated evidence of recovery or a
+profitability guarantee. CLI: `-probability-model vwap_reversion -reversion-half-life 5`. Auto is available as `vwap_reversion_auto`; Manual remains `vwap_reversion`, and Off is `gbm`.
+
+Production rate inputs use batched DGS3MO historical vintages, selected locally
+for each decision. A vintage becomes eligible the calendar day after both its
+observation and vintage dates, conservatively avoiding unknown intraday release
+timing. Older revisions cannot displace newer available observations. Missing
+initial history fails the run; holidays carry the latest available value. Legacy
+custom providers without the history method use an explicit fixed-before-start
+policy. Result metadata identifies the policy and the initial/fixed rate;
+per-decision diagnostics report the rate actually used.
+
+One provider client caches up to eight exact date ranges in memory, coalesces
+identical concurrent history requests, and spaces FRED history attempts by at
+least 600 ms (100/minute). 429 responses use bounded cancellable backoff. Other
+processes sharing the key are outside this limiter. Pagination/vintages may
+require multiple requests; there are no requests per bar, symbol or simulation
+path. The cache is not a saved-run database and clears on restart.
+
+FRED history requests bound both the observation range and the vintage range.
+Vintage windows span at most four calendar years (at most 1,461 distinct dates),
+below FRED's 2,000-vintage-date JSON limit; observation pagination resets for each
+window. Longer backtests merge those windows before date-based selection. Provider
+failures identify stock-price (Alpaca) versus interest-rate (FRED) loading without
+exposing provider response bodies, request URLs or credentials.
+
+
+### Automatic VWAP mean reversion
+
+The dashboard exposes Off (plain GBM), Auto, and Manual (half-life override).
+Auto fits `log(P[t+1]/P[t]) = c + b*log(VWAP[t]/P[t]) + error`, using
+only preparation bars strictly before trading begins. VWAP uses the selected
+rolling window and a complete window at each calibration observation. Measuring
+actual price returns excludes mechanical VWAP catch-up from the response.
+An intercept separates background drift from the distance response.
+Up to 252 transitions are used, with at least 60 required; the 95% approximate
+Newey-West (5-lag) slope interval must lie strictly inside (0,1). Half-life is
+`ln(2)/[-ln(1-b)]`, bounded to 0.1–252 trading days. Fitted annual log drift is
+`c * [-ln(1-b)] / b * periods_per_year`, matching the one-day conditional mean
+of the OU simulation. Rolling market volatility is still estimated separately.
+With drift, the long-run expected log level can be offset from VWAP; half-life
+measures decay around that level. This is empirical calibration, not proof of
+causation, a validated forecast, or a guarantee of trading profits.
+
+Estimates are frozen for the entire run (they may become stale in long runs),
+recorded per symbol in `settings.reversion_estimates`, and never silently replaced
+with manual values or GBM. Any unreliable symbol fails the job with
+`unreliable_reversion`; the dashboard displays a dismissible corner notification with a Review settings button; inputs remain preserved.
+Changing the VWAP window recalibrates Auto on the next run. Auto requires daily
+execution and may need history before the earliest permitted trading start.

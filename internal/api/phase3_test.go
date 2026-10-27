@@ -95,6 +95,11 @@ func TestHTTPTradingMatchesDirectEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := backtest.BacktestConfig{InitialAccount: account.Account{Cash: 50000, Equity: 50000, BuyingPower: 50000}, Allocations: v.Allocations, BarsBySymbol: map[string][]marketdata.BarTick{}, MonteCarloInput: settings.MonteCarlo, VolatilityWindow: 3, PeriodsPerYear: 252}
+	config.HoldingDays = 5
+	config.RatePolicy = "fixed_before_start"
+	config.MonteCarloInput.Model = "gbm"
+	config.MonteCarloInput.HoldingDays = 5
+	config.MonteCarloInput.TimeHorizon = 5.0 / 252
 	config.MonteCarloInput.RiskFreeRate = 1
 	for _, a := range v.Allocations {
 		config.BarsBySymbol[a.Symbol], err = provider.FetchBars(context.Background(), a.Symbol, v.Start, v.End, "", "")
@@ -114,6 +119,12 @@ func TestHTTPTradingMatchesDirectEngine(t *testing.T) {
 	// Random UUIDs identify orders, not simulation outcomes. Compare all other data.
 	clearIDs := func(r *BacktestResultResponse) {
 		for i := range r.Snapshots {
+			for j := range r.Snapshots[i].FilledOrders {
+				r.Snapshots[i].FilledOrders[j].ID = ""
+			}
+			for j := range r.Snapshots[i].OrderEvents {
+				r.Snapshots[i].OrderEvents[j].ID = ""
+			}
 			for _, o := range []*Order{r.Snapshots[i].SubmittedOrder, r.Snapshots[i].FilledOrder} {
 				if o != nil {
 					o.ID = ""
@@ -128,7 +139,7 @@ func TestHTTPTradingMatchesDirectEngine(t *testing.T) {
 	}
 	buys, sells := 0, 0
 	for i, s := range got.Snapshots {
-		if o := s.FilledOrder; o != nil {
+		for _, o := range s.FilledOrders {
 			if o.Action == "buy" {
 				buys++
 				if i != 4 || *o.FilledPrice != 91 {
@@ -136,8 +147,8 @@ func TestHTTPTradingMatchesDirectEngine(t *testing.T) {
 				}
 			} else if o.Action == "sell" {
 				sells++
-				if i != 6 || *o.FilledPrice != 109 {
-					t.Fatal("sell did not fill at next open")
+				if i != 4 || *o.FilledPrice != 108.5 {
+					t.Fatal("sell did not fill at the touched protective target")
 				}
 			}
 		}
@@ -167,6 +178,12 @@ func TestHTTPProviderFailuresAndExpiry(t *testing.T) {
 			}
 			if s.Error.Code != want {
 				t.Fatalf("code %s want %s", s.Error.Code, want)
+			}
+			if failure == "bars" && (s.Error.Provider != "alpaca" || !strings.Contains(s.Error.Message, "Alpaca")) {
+				t.Fatal("stock provider failure not identified")
+			}
+			if failure == "rate" && (s.Error.Provider != "fred" || !strings.Contains(s.Error.Message, "FRED")) {
+				t.Fatal("rate provider failure not identified")
 			}
 			if w = requestHTTP(h, "GET", "/api/backtests/"+id+"/result", "", ""); w.Code != 409 {
 				t.Fatal("failed job exposed result")

@@ -59,7 +59,7 @@ func TestServiceMatchesDirectEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(output.Result, direct) || !p.asOf.Equal(request.End) || p.asOf.Location().String() != "America/New_York" || request.Allocations[0].Symbol != " aapl " {
+	if !reflect.DeepEqual(output.Result, direct) || !p.asOf.Equal(request.Start.In(service.marketLocation).AddDate(0, 0, -1)) || p.asOf.Location().String() != "America/New_York" || request.Allocations[0].Symbol != " aapl " {
 		t.Fatal("orchestration changed results, as-of date, or input")
 	}
 }

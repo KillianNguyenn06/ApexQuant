@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 
@@ -13,19 +14,25 @@ import (
 )
 
 type MonteCarlo struct {
-	Volatility   float64 `json:"volatility"`     // sigma
-	RiskFreeRate float64 `json:"risk_free_rate"` // r
-	TimeHorizon  float64 `json:"time_horizon"`   // T
-	NumPaths     int     `json:"num_paths"`      // N e.g: 10000
-	NumSteps     int     `json:"num_steps"`      // 252 for Standard, 100 for shorter interval
-	Seed         int64   `json:"seed"`
+	AutoLogDrift          float64 `json:"auto_log_drift,omitempty"`
+	HoldingDays           int     `json:"holding_days,omitempty"`
+	Model                 string  `json:"model,omitempty"`
+	ReversionHalfLifeDays float64 `json:"reversion_half_life_days,omitempty"`
+	Volatility            float64 `json:"volatility"`     // sigma
+	RiskFreeRate          float64 `json:"risk_free_rate"` // r
+	TimeHorizon           float64 `json:"time_horizon"`   // T
+	NumPaths              int     `json:"num_paths"`      // N e.g: 10000
+	NumSteps              int     `json:"num_steps"`      // 252 for Standard, 100 for shorter interval
+	Seed                  int64   `json:"seed"`
 }
 
 type MonteCarloResult struct {
 	WinProbability  float64 `json:"win_probability"`
 	LossProbability float64 `json:"loss_probability"`
-	//ExpectedReturn     float64 `json:"expected_return"`
-	TimeoutProbability float64 `json:"timeout_probability"`
+	// Payoffs are per unit of planned stop risk, in stable path-index order.
+	Payoffs            []float64 `json:"-"`
+	TimeoutMeanReturn  float64   `json:"timeout_mean_return"`
+	TimeoutProbability float64   `json:"timeout_probability"`
 }
 
 // =================================================
@@ -33,56 +40,109 @@ type MonteCarloResult struct {
 // =================================================
 func GBMModel(input MonteCarlo, position account.Position, result *MonteCarloResult, signal algorithm.Signal) (float64, float64, float64) {
 
-	wins := 0.0
-	losses := 0.0
-	timeOut := 0.0
-	dt := input.TimeHorizon / float64(input.NumSteps)
-	drift := (input.RiskFreeRate - 0.5*math.Pow(input.Volatility, 2)) * dt
-	volatility := input.Volatility * math.Sqrt(dt)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
+	*result = MonteCarloResult{}
+	if input.NumPaths <= 0 || input.NumSteps <= 0 || input.TimeHorizon <= 0 || signal.Price <= 0 || position.StopLossPrice <= 0 || position.StopLossPrice >= signal.Price || position.TakeProfitPrice <= signal.Price {
+		return 0, 0, 0
+	}
+	days := input.HoldingDays
+	if days <= 0 {
+		days = input.NumSteps
+	} // Generic callers retain stepwise barriers over their explicit horizon.
+	stepsPerDay := max(1, (input.NumSteps+days-1)/days)
+	dt := input.TimeHorizon / float64(days*stepsPerDay)
+	drift := (input.RiskFreeRate - .5*input.Volatility*input.Volatility) * dt
+	diffusion := input.Volatility * math.Sqrt(dt)
+	reversion := (input.Model == "vwap_reversion" || input.Model == "vwap_reversion_auto") && signal.VWAP > 0 && input.ReversionHalfLifeDays > 0
+	logVWAP, decay, shift, reversionDiffusion := 0.0, 0.0, 0.0, 0.0
+	if reversion {
+		k := math.Ln2 * float64(days) / (input.TimeHorizon * input.ReversionHalfLifeDays)
+		decay = math.Exp(-k * dt)
+		logVWAP = math.Log(signal.VWAP)
+		logDrift := input.RiskFreeRate - .5*input.Volatility*input.Volatility
+		if input.Model == "vwap_reversion_auto" {
+			logDrift = input.AutoLogDrift
+		}
+		shift = logDrift * (1 - decay) / k
+		reversionDiffusion = input.Volatility * math.Sqrt((1-decay*decay)/(2*k))
+	}
 	seed := input.Seed
 	if seed == 0 {
 		seed = time.Now().UnixNano()
 	}
-
-	for i := 0; i < input.NumPaths; i++ {
+	result.Payoffs = make([]float64, input.NumPaths)
+	outcomes := make([]byte, input.NumPaths)
+	endings := make([]float64, input.NumPaths)
+	var wg sync.WaitGroup
+	workers := min(runtime.GOMAXPROCS(0), input.NumPaths)
+	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
-		go func(pathIndex int) {
+		go func(worker int) {
 			defer wg.Done()
-			outcome := "timeout"
-			st := signal.Price
-			localRand := rand.New(rand.NewSource(seed + int64(pathIndex))) // Create a new random source for each goroutine
-			for j := 0; j < input.NumSteps; j++ {
-				z := localRand.NormFloat64()           // Generate a random number from a standard normal distribution
-				st = st * math.Exp(drift+volatility*z) // Calculate the next price using the GBM formula
-				if st >= position.TakeProfitPrice {
-					outcome = "win"
-					break
-				} else if st <= position.StopLossPrice {
-					outcome = "loss"
-					break
+			rng := rand.New(rand.NewSource(1))
+			for i := worker; i < input.NumPaths; i += workers {
+				rng.Seed(seed + int64(i))
+				st := signal.Price
+				exit := st
+				for day := 0; day < days; day++ {
+					open, low, high := st, st, st
+					for step := 0; step < stepsPerDay; step++ {
+						z := rng.NormFloat64()
+						if reversion {
+							x := logVWAP + (math.Log(st)-logVWAP)*decay + shift
+							st = math.Exp(x + reversionDiffusion*z)
+						} else {
+							st *= math.Exp(drift + diffusion*z)
+						}
+						low = min(low, st)
+						high = max(high, st)
+					}
+					// Use the same daily OHLC convention as execution: opening gaps first,
+					// then stop-first if both boundaries touch. A deadline exits at close.
+					switch {
+					case open <= position.StopLossPrice:
+						exit = open
+						outcomes[i] = 2
+					case open >= position.TakeProfitPrice:
+						exit = open
+						outcomes[i] = 1
+					case low <= position.StopLossPrice:
+						exit = position.StopLossPrice
+						outcomes[i] = 2
+					case high >= position.TakeProfitPrice:
+						exit = position.TakeProfitPrice
+						outcomes[i] = 1
+					default:
+						exit = st
+					}
+					if outcomes[i] != 0 {
+						break
+					}
 				}
+				result.Payoffs[i] = (exit - signal.Price) / (signal.Price - position.StopLossPrice)
+				endings[i] = exit/signal.Price - 1
 			}
-			mu.Lock()
-			defer mu.Unlock()
-			switch outcome {
-			case "win":
-				wins++
-			case "loss":
-				losses++
-			default:
-				timeOut++
-			}
-		}(i)
+		}(worker)
 	}
 	wg.Wait()
-	result.WinProbability = wins / float64(input.NumPaths)
-	result.LossProbability = losses / float64(input.NumPaths)
-	result.TimeoutProbability = timeOut / float64(input.NumPaths)
-
+	var wins, losses, timeouts int
+	for i, outcome := range outcomes {
+		switch outcome {
+		case 1:
+			wins++
+		case 2:
+			losses++
+		default:
+			timeouts++
+			result.TimeoutMeanReturn += endings[i]
+		}
+	}
+	n := float64(input.NumPaths)
+	result.WinProbability = float64(wins) / n
+	result.LossProbability = float64(losses) / n
+	result.TimeoutProbability = float64(timeouts) / n
+	if timeouts > 0 {
+		result.TimeoutMeanReturn /= float64(timeouts)
+	}
 	return result.WinProbability, result.LossProbability, result.TimeoutProbability
 }
 

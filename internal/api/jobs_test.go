@@ -226,3 +226,17 @@ func TestResultByteBudgetEvictsOldest(t *testing.T) {
 		t.Fatal("byte budget did not evict oldest result")
 	}
 }
+
+func TestProviderFailureContextIsAllowlisted(t *testing.T) {
+	m := testJobs(t, func(context.Context, string, ValidatedRequest) (BacktestResultResponse, error) {
+		return BacktestResultResponse{}, &APIError{Code: "provider_error", Message: "private-key", Provider: "private-key"}
+	}, DefaultJobOptions())
+	j, e := m.Submit(ValidatedRequest{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := awaitStatus(t, m, j.ID, StatusFailed)
+	if s.Error == nil || s.Error.Provider != "" || strings.Contains(s.Error.Message, "private-key") {
+		t.Fatal("unknown provider context leaked")
+	}
+}

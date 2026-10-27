@@ -36,3 +36,10 @@ test('equity inspection clamps to displayed days and returns capital-relative ga
   assert.deepEqual(equityReturn(10021.81, 10000), { gain: 10021.81 - 10000, percent: (10021.81 - 10000) / 10000 * 100 });
   assert.deepEqual(equityReturn(900, 1000), { gain: -100, percent: -10 });
 });
+
+test('value bounds handles histories beyond JavaScript argument limits', () => {
+  const values = Array.from({length: 200000}, (_, i) => 10000 + i / 100);
+  const [low, high] = valueBounds(values);
+  assert.ok(low < values[0]); assert.ok(high > values.at(-1));
+  assert.deepEqual(valueBounds([NaN, Infinity, null]), [0, 1]);
+});

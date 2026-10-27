@@ -103,12 +103,23 @@ func reconcile(t *testing.T, c BacktestConfig, r BacktestResult) {
 			if s.Bar.Symbol != a.Symbol || !s.Timestamp.Equal(bar.Timestamp) {
 				t.Fatal("snapshot ordering")
 			}
-			if o := s.FilledOrder; o != nil {
+			fills := s.FilledOrders
+			if len(fills) == 0 && s.FilledOrder != nil {
+				fills = []account.Order{*s.FilledOrder}
+			}
+			for _, o := range fills {
 				p := pending[a.Symbol]
-				if p == nil || p.ID != o.ID || !p.CreatedAt.Before(s.Timestamp) || o.Quantity <= 0 || o.Quantity > p.Quantity+1e-8 {
+				if o.Quantity <= 0 {
+					t.Fatal("nonpositive fill")
+				}
+				if o.Action == "Buy" && (p == nil || p.ID != o.ID || !p.CreatedAt.Before(s.Timestamp) || o.Quantity > p.Quantity+1e-8) {
 					t.Fatal("invalid next-bar fill")
 				}
-				near(o.FilledPrice, bar.Open)
+				if o.Action == "Buy" {
+					near(o.FilledPrice, bar.Open)
+				} else if !o.CreatedAt.Equal(s.Timestamp) || o.FilledPrice < bar.Low || o.FilledPrice > bar.High {
+					t.Fatal("invalid protective execution price or time")
+				}
 				cost := o.Quantity * o.FilledPrice
 				if o.Action == "Buy" {
 					if cost > math.Min(cash, bp)+1e-7 || (quantities[a.Symbol]+o.Quantity)*bar.Open > openingEquity*a.Weight+1e-7 {

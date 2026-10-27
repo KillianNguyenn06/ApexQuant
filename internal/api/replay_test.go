@@ -79,9 +79,7 @@ func TestReplaySequenceAndValues(t *testing.T) {
 			if data.Snapshot.Signal.Action == "hold" {
 				holds++
 			}
-			if data.Snapshot.FilledOrder != nil {
-				fills++
-			}
+			fills += len(data.Snapshot.FilledOrders)
 			if data.Snapshot.SubmittedOrder != nil {
 				submissions++
 			}
@@ -104,7 +102,7 @@ func TestReplaySequenceAndValues(t *testing.T) {
 			}
 		}
 	}
-	if holds == 0 || fills != 2 || submissions != 2 {
+	if holds == 0 || fills != 2 || submissions != 1 {
 		t.Fatalf("fixture did not exercise Hold/submissions/fills: %d/%d/%d", holds, submissions, fills)
 	}
 	for _, i := range []int{-1, timeline.Len()} {

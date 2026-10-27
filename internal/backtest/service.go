@@ -18,7 +18,7 @@ import (
 type DataProvider interface {
 	FetchBars(context.Context, string, time.Time, time.Time, string, string) ([]marketdata.BarTick, error)
 	// FetchRiskFreeRate uses the calendar date in the supplied time's location.
-	// Service.Run supplies the requested end instant in America/New_York.
+	// Legacy providers are frozen strictly before the run starts.
 	FetchRiskFreeRate(context.Context, string, time.Time) (float64, error)
 }
 type Credentials struct {
@@ -44,9 +44,14 @@ func DefaultServiceSettings() ServiceSettings {
 }
 
 type RunRequest struct {
-	InitialCapital float64
-	Allocations    []session.PortfolioAllocation
-	Start, End     time.Time
+	HoldingDays           int
+	ProbabilityModel      string
+	ReversionHalfLifeDays float64
+	DailyVWAPWindow       int
+	Timeframe             string
+	InitialCapital        float64
+	Allocations           []session.PortfolioAllocation
+	Start, End            time.Time
 }
 type RunOutput struct {
 	Config BacktestConfig
@@ -55,7 +60,8 @@ type RunOutput struct {
 
 // ServiceError deliberately contains no provider error text or credentials.
 type ServiceError struct {
-	Code string
+	Provider string
+	Code     string
 }
 
 func (e *ServiceError) Error() string {
@@ -97,6 +103,9 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 	fail := func(code string) (RunOutput, error) {
 		return RunOutput{}, &ServiceError{Code: code}
 	}
+	providerFailure := func(provider string) (RunOutput, error) {
+		return RunOutput{}, &ServiceError{Code: "provider_error", Provider: provider}
+	}
 	if err := ctx.Err(); err != nil {
 		return fail("canceled")
 	}
@@ -118,7 +127,23 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 	if err := session.PortfolioAllocate(tickers, weights, &allocations); err != nil {
 		return fail("invalid_request")
 	}
+	if request.Timeframe == "1Min" && !MinuteExecutionEnabled {
+		return fail("minute_execution_disabled")
+	}
+	if request.Timeframe != "" && request.Timeframe != "1Day" && request.Timeframe != "1Min" {
+		return fail("invalid_request")
+	}
+	if request.DailyVWAPWindow != 0 && (request.Timeframe == "1Min" || request.DailyVWAPWindow < 2 || request.DailyVWAPWindow > 252) {
+		return fail("invalid_request")
+	}
+	if request.HoldingDays < 0 || request.HoldingDays > 252 || (request.ProbabilityModel != "" && request.ProbabilityModel != "gbm" && request.ProbabilityModel != "vwap_reversion" && request.ProbabilityModel != "vwap_reversion_auto") || math.IsNaN(request.ReversionHalfLifeDays) || math.IsInf(request.ReversionHalfLifeDays, 0) || request.ReversionHalfLifeDays < 0 || request.ReversionHalfLifeDays > 252 || (request.ProbabilityModel != "vwap_reversion" && request.ReversionHalfLifeDays != 0) {
+		return fail("invalid_request")
+	}
 	c := BacktestConfig{
+		HoldingDays:         request.HoldingDays,
+		DailyVWAPWindow:     request.DailyVWAPWindow,
+		Timeframe:           request.Timeframe,
+		DailyVolatilityBars: make(map[string][]marketdata.BarTick),
 		InitialAccount: account.Account{
 			Cash:        request.InitialCapital,
 			Equity:      request.InitialCapital,
@@ -131,15 +156,64 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 		VolatilityWindow:  s.settings.VolatilityWindow,
 		PeriodsPerYear:    s.settings.PeriodsPerYear,
 	}
+	c.HoldingDays = HoldingPeriod(c)
+	c.MonteCarloInput.HoldingDays = c.HoldingDays
+	c.MonteCarloInput.TimeHorizon = float64(c.HoldingDays) / s.settings.PeriodsPerYear
+	c.MonteCarloInput.Model = request.ProbabilityModel
+	if c.MonteCarloInput.Model == "" {
+		c.MonteCarloInput.Model = "gbm"
+	}
+	c.MonteCarloInput.ReversionHalfLifeDays = request.ReversionHalfLifeDays
+	if c.MonteCarloInput.Model == "vwap_reversion" && c.MonteCarloInput.ReversionHalfLifeDays == 0 {
+		c.MonteCarloInput.ReversionHalfLifeDays = 5
+	}
 	for _, a := range allocations {
+		if request.Timeframe == "1Min" {
+			provider, ok := s.provider.(interface {
+				FetchBarsTimeframe(context.Context, string, time.Time, time.Time, string, string, string) ([]marketdata.BarTick, error)
+			})
+			if !ok {
+				return fail("unsupported_timeframe")
+			}
+			daily, err := s.provider.FetchBars(ctx, a.Symbol, request.Start.AddDate(0, 0, -(2*s.settings.VolatilityWindow+14)), request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret)
+			if err != nil {
+				return providerFailure("alpaca")
+			}
+			if marketdata.ValidateBars(a.Symbol, daily) != nil {
+				return fail("invalid_data")
+			}
+			c.DailyVolatilityBars[a.Symbol] = daily
+			bars, err := provider.FetchBarsTimeframe(ctx, a.Symbol, request.Start, request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret, "1Min")
+			if err != nil {
+				return providerFailure("alpaca")
+			}
+			if marketdata.ValidateBarsTimeframe(a.Symbol, bars, "1Min") != nil {
+				return fail("invalid_data")
+			}
+			for _, bar := range bars {
+				if bar.Timestamp.Before(request.Start) || bar.Timestamp.Add(time.Minute).After(request.End) {
+					return fail("invalid_data")
+				}
+				local := bar.Timestamp.In(s.marketLocation)
+				minute := local.Hour()*60 + local.Minute()
+				if minute >= 570 && minute < 960 {
+					c.BarsBySymbol[a.Symbol] = append(c.BarsBySymbol[a.Symbol], bar)
+				}
+			}
+			continue
+		}
 		// A bounded calendar buffer accommodates ordinary weekends and holidays.
-		fetchStart := request.Start.AddDate(0, 0, -(2*s.settings.VolatilityWindow + 14))
+		preparation := s.settings.VolatilityWindow
+		if request.ProbabilityModel == "vwap_reversion_auto" {
+			preparation = 253 + DailyVWAPWindowSize(c)
+		}
+		fetchStart := request.Start.AddDate(0, 0, -(2*preparation + 14))
 		bars, err := s.provider.FetchBars(ctx, a.Symbol, fetchStart, request.End, s.credentials.AlpacaKey, s.credentials.AlpacaSecret)
 		if err != nil {
 			if ctx.Err() != nil {
 				return fail("canceled")
 			}
-			return fail("provider_error")
+			return providerFailure("alpaca")
 		}
 		if err := marketdata.ValidateBars(a.Symbol, bars); err != nil {
 			return fail("invalid_data")
@@ -154,20 +228,58 @@ func (s *Service) Run(ctx context.Context, request RunRequest) (RunOutput, error
 			}
 		}
 		c.BarsBySymbol[a.Symbol] = bars[split:]
-		c.VolatilityHistory[a.Symbol] = bars[max(0, split-s.settings.VolatilityWindow):split]
+		c.VolatilityHistory[a.Symbol] = bars[max(0, split-preparation):split]
 	}
 
-	// FRED accepts a calendar date, while Alpaca accepts UTC timestamp bounds.
-	// Select the requested US market date without changing the end instant.
-	// The constant-rate model remains; historical curves remain future work.
-	rate, err := s.provider.FetchRiskFreeRate(ctx, s.credentials.FREDKey, request.End.In(s.marketLocation))
-	if err != nil {
-		if ctx.Err() != nil {
-			return fail("canceled")
+	if c.Timeframe == "1Min" {
+		reference := c.BarsBySymbol[allocations[0].Symbol]
+		for _, a := range allocations[1:] {
+			bars := c.BarsBySymbol[a.Symbol]
+			if len(bars) != len(reference) {
+				return fail("unaligned_minute_data")
+			}
+			for i, b := range bars {
+				if !b.Timestamp.Equal(reference[i].Timestamp) {
+					return fail("unaligned_minute_data")
+				}
+			}
 		}
-		return fail("provider_error")
 	}
-	c.MonteCarloInput.RiskFreeRate = rate
+	if err := prepareReversion(&c); err != nil {
+		return fail("unreliable_reversion")
+	}
+	// Fetch vintages once, then select rates locally at each decision date.
+	if provider, ok := s.provider.(interface {
+		FetchRiskFreeRates(context.Context, string, time.Time, time.Time) ([]marketdata.RateObservation, error)
+	}); ok {
+		history, err := provider.FetchRiskFreeRates(ctx, s.credentials.FREDKey, request.Start.In(s.marketLocation).AddDate(0, 0, -45), request.End.In(s.marketLocation))
+		if err != nil {
+			if ctx.Err() != nil {
+				return fail("canceled")
+			}
+			return providerFailure("fred")
+		}
+		c.RiskFreeRates = history
+		c.RatePolicy = "historical_vintages_prior_day"
+		first, ok := marketdata.RateAt(history, request.Start.In(s.marketLocation).Format(time.DateOnly))
+		if !ok {
+			return fail("invalid_data")
+		}
+		c.MonteCarloInput.RiskFreeRate = first.Rate
+		c.InitialRateDate = first.Date
+	} else {
+		// Explicit compatibility for providers that only expose a single dated rate.
+		rate, err := s.provider.FetchRiskFreeRate(ctx, s.credentials.FREDKey, request.Start.In(s.marketLocation).AddDate(0, 0, -1))
+		if err != nil {
+			if ctx.Err() != nil {
+				return fail("canceled")
+			}
+			return providerFailure("fred")
+		}
+		c.MonteCarloInput.RiskFreeRate = rate
+		c.RatePolicy = "fixed_before_start"
+	}
+
 	if ctx.Err() != nil {
 		return fail("canceled")
 	}

@@ -28,3 +28,27 @@ export class CameraMotion {
     draw(from); this.frame = this.request(tick);
   }
 }
+
+// Presentation-only number transitions; recorded account/position values stay exact.
+export class ValueMotion {
+  constructor({ request = callback => requestAnimationFrame(callback), cancel = id => cancelAnimationFrame(id), now = () => performance.now() } = {}) {
+    Object.assign(this, { request, cancel, now, value: null, frame: null, revision: 0 });
+  }
+  clear() { this.revision++; if (this.frame !== null) this.cancel(this.frame); this.frame = null; this.value = null; }
+  move(target, draw, duration = 0) {
+    const from = this.value;
+    this.clear();
+    const revision = this.revision, began = this.now(), finish = () => { this.value = { ...target }; draw(this.value); };
+    if (!from || duration <= 0) { finish(); return; }
+    const tick = timestamp => {
+      if (revision !== this.revision) return;
+      const progress = Math.max(0, Math.min(1, (timestamp - began) / duration));
+      const ease = duration <= 200 ? progress : progress * progress * (3 - 2 * progress);
+      this.value = Object.fromEntries(Object.entries(target).map(([key, value]) => [key,
+        Number.isFinite(from[key]) && Number.isFinite(value) ? from[key] + (value - from[key]) * ease : value]));
+      if (progress === 1) this.value = { ...target };
+      draw(this.value); this.frame = progress < 1 ? this.request(tick) : null;
+    };
+    tick(began);
+  }
+}

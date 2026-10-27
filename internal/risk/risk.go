@@ -12,23 +12,58 @@ import (
 // =================================================
 func KellyCriterion(result simulation.MonteCarloResult, position account.Position) float64 {
 
-	if position.StopLossPrice >= position.EntryPrice {
+	if position.StopLossPrice >= position.EntryPrice || position.TakeProfitPrice <= position.EntryPrice || position.EntryPrice <= 0 {
 		fmt.Printf("\n\tError: Stop loss must be below entry price.")
 		return 0
 	}
-	winAmount := position.TakeProfitPrice - position.EntryPrice
-	lossAmount := position.EntryPrice - position.StopLossPrice
-	numerator := (winAmount/lossAmount)*result.WinProbability - result.LossProbability
-	if lossAmount == 0 {
+	// Maximize mean log(1+f*payoff), where f is the fraction of equity
+	// exposed to one planned stop loss. Include every timeout's terminal payoff.
+	if len(result.Payoffs) > 0 {
+		upper := 1.0
+		for _, r := range result.Payoffs {
+			if math.IsNaN(r) || math.IsInf(r, 0) {
+				return 0
+			}
+			if r < 0 {
+				upper = min(upper, (1-1e-12)/(-r))
+			}
+		}
+		derivative := func(f float64) float64 {
+			sum := 0.0
+			for _, r := range result.Payoffs {
+				sum += r / (1 + f*r)
+			}
+			return sum / float64(len(result.Payoffs))
+		}
+		if derivative(0) <= 0 {
+			return 0
+		}
+		if derivative(upper) >= 0 {
+			return upper
+		}
+		lo, hi := 0.0, upper
+		for i := 0; i < 50; i++ {
+			mid := (lo + hi) / 2
+			if derivative(mid) > 0 {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		return (lo + hi) / 2
+	}
+	// Compatibility for analytical binary callers:
+	// unspecified timeout payoffs are assumed zero, explicitly included in the expected-log objective.
+	b := (position.TakeProfitPrice - position.EntryPrice) / (position.EntryPrice - position.StopLossPrice)
+	p, q := result.WinProbability, result.LossProbability
+	if p < 0 || q < 0 || p+q > 1+1e-9 || p+q <= 0 {
 		return 0
 	}
-	denominator := winAmount / lossAmount
-	fraction := numerator / denominator
-	if fraction < 0 {
-		fmt.Printf("\n\tTrade has no positive edge: %v", fraction)
+	fraction := (b*p - q) / (b * (p + q))
+	if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction < 0 {
 		return 0
 	}
-	return fraction
+	return min(1, fraction)
 }
 
 // =================================================

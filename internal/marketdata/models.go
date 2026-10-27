@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,6 +47,9 @@ type alpacaResponse struct {
 // =================================================
 // Client keeps provider configuration outside the backtest engine.
 type Client struct {
+	fredMu     sync.Mutex
+	nextFRED   time.Time
+	rateCache  map[string][]RateObservation
 	HTTPClient *http.Client
 	AlpacaURL  string
 	FREDURL    string
@@ -60,6 +64,14 @@ func FetchAPI(symbol string, start, end time.Time, apiKey, apiSecret string) ([]
 }
 
 func (c *Client) FetchBars(ctx context.Context, symbol string, start, end time.Time, apiKey, apiSecret string) ([]BarTick, error) {
+	return c.FetchBarsTimeframe(ctx, symbol, start, end, apiKey, apiSecret, "1Day")
+}
+
+// FetchBarsTimeframe keeps pagination and validation identical for both frequencies.
+func (c *Client) FetchBarsTimeframe(ctx context.Context, symbol string, start, end time.Time, apiKey, apiSecret, timeframe string) ([]BarTick, error) {
+	if timeframe != "1Day" && timeframe != "1Min" {
+		return nil, fmt.Errorf("unsupported timeframe")
+	}
 	if start.IsZero() || end.IsZero() || !start.Before(end) {
 		return nil, fmt.Errorf("start must precede end")
 	}
@@ -85,7 +97,7 @@ func (c *Client) FetchBars(ctx context.Context, symbol string, start, end time.T
 
 	query := endpoint.Query()
 	query.Set("symbols", symbol)
-	query.Set("timeframe", "1Day")
+	query.Set("timeframe", timeframe)
 	query.Set("start", start.UTC().Format(time.RFC3339))
 	query.Set("end", end.UTC().Format(time.RFC3339))
 	query.Set("limit", "1000")
@@ -119,7 +131,7 @@ func (c *Client) FetchBars(ctx context.Context, symbol string, start, end time.T
 		seen[token] = true
 		query.Set("page_token", token)
 	}
-	if err := ValidateBars(symbol, bars); err != nil {
+	if err := ValidateBarsTimeframe(symbol, bars, timeframe); err != nil {
 		return nil, err
 	}
 	for _, bar := range bars {

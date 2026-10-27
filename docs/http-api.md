@@ -34,7 +34,22 @@ The dashboard reads both limits from the server; smaller flag overrides still ap
 }
 ```
 
-All fields are required. Capital must be finite and positive. Select 1–8 symbols.
+The four fields in this example are required. Capital must be finite and positive.
+Select 1–8 symbols. Optional strategy fields are:
+
+| Field | Behavior |
+| --- | --- |
+| `timeframe` | Omitted or `1Day`; `1Min` is temporarily disabled at admission |
+| `vwap_window` | Daily rolling VWAP/band window, 2–252 bars; default 20 |
+| `holding_days` | Shared execution/simulation deadline, 1–252 bars; default 5 |
+| `probability_model` | `gbm` (Off/default), `vwap_reversion_auto` (Auto), or `vwap_reversion` (Manual) |
+| `reversion_half_life_days` | Manual only, positive and at most 252; omitted/zero resolves to 5 in the service |
+
+Auto uses only pre-run history and records per-symbol estimates in resolved
+settings. An unreliable fit fails the job with `unreliable_reversion`; it never
+silently falls back to another model. See [replay/model details](replay.md) for
+the estimator, reliability screen and frozen-fit limitations.
+
 Symbols are trimmed, uppercased, checked against the supported ticker syntax,
 and checked for duplicates. Each percentage is positive and at most 100. Their
 sum must be within 0.0001 percentage points of 100, matching the engine's
@@ -49,7 +64,8 @@ conservatively excludes the current day even if its regular session has closed.
 Weekend/holiday dates are permitted; returned bars still require the engine's
 minimum count and matching timelines. The API does not silently intersect dates.
 
-Credentials and simulation tuning parameters are server-owned. Unknown JSON
+Credentials, path/step counts, random seed and volatility settings are server-owned;
+the strategy fields above are user configurable. Unknown JSON
 fields, invalid types, null root values, and trailing JSON are rejected.
 Missing or null individual required fields fail semantic validation.
 Handlers enforce application/json and configured request body limits.
@@ -89,7 +105,11 @@ lifetime; starting or reconnecting a replay does not renew stored-job retention.
   within each aligned UTC calendar date. Each symbol snapshot retains the shared account values.
 
 Snapshot fields: `timestamp`, `bar`, `indicator`, `signal`, `position`, `account`,
-`submitted_order`, `filled_order`. Timestamps serialize in UTC RFC3339 format.
+`submitted_order`, `filled_order`, plus optional `filled_orders`, `order_events`,
+`decision_reason`, `execution_reason`, and `risk`. `filled_orders` preserves multiple
+fills in a bar; `filled_order` remains the legacy last-fill view. Risk diagnostics
+retain model, decision rate, target/stop/timeout probabilities, timeout mean return,
+Kelly fraction and planned quantity. Timestamps serialize in UTC RFC3339 format.
 Actions/status strings are lowercase. Buy signals are distinct from submitted
 orders. Hold signals have a symbol and snapshot timestamp, with null signal price.
 Absent orders serialize as null. Submitted orders have null `filled_price`.
@@ -97,21 +117,29 @@ Flat positions have null entry/stop/target levels; engine candidate levels on a
 flat position must not be presented as an executed position.
 
 The result includes configured Monte Carlo paths, steps, horizon, initial
-volatility, seed, volatility window, and annualization. Seed zero still means
+volatility, seed, volatility window, annualization, daily VWAP window, holding
+period and model. Auto adds per-symbol `reversion_estimates`, including half-life,
+strength/uncertainty, fitted drift, sample count and last preparation date. Seed zero still means
 randomized execution; it is not an exact captured seed. Metadata identifies feed,
-timeframe, adjustment, and the rate used. `risk_free_rate_date` remains null unless
-the provider supplies it; the current fetch function returns only the rate.
+timeframe, adjustment, rate policy, and initial/fixed rate. Production historical
+vintages populate `risk_free_rate_date` with the initial observation date;
+legacy fixed-rate providers may leave it null. Per-decision diagnostics carry
+the rate actually used. Auto's fitted drift is separate from this risk-free rate.
 
-Unavailable indicator values serialize as null, not zero. Availability is tracked
-independently per symbol across the complete snapshot history. Before any positive
-volume, all cumulative indicators are null. A zero-volume bar after positive
-volume retains its cumulative indicators; that individual bar's VWAP is null.
+Before any positive volume, daily mapped indicators are null. Daily VWAP and bands
+use the selected rolling window, not a cumulative whole-run calculation. A single
+zero-volume bar contributes no weight; its individual bar VWAP is null.
+Known limitation: the daily mapper still tracks whether a symbol has ever had
+positive volume. If all positive-volume bars leave the rolling window, it emits
+cleared zero-valued bands rather than unavailable values. Window-aware availability
+mapping and regression coverage remain follow-up work; the engine itself marks
+that window unavailable and does not generate a buy from those cleared bands.
 A valid standard deviation of zero remains numeric zero. Uncomputed Z-score and
 unretained signal probabilities are omitted. Non-finite engine results are rejected
 rather than silently converted to null.
 
 The mapping owns its output data and does not modify the engine. Map the full
-history before any later pagination/replay, because cumulative availability
+history before any later pagination/replay, because retained per-symbol availability
 cannot be inferred from an isolated slice.
 
 ## Errors
@@ -165,11 +193,14 @@ result. No real provider credentials or network calls are required.
 
 `backtest.Service.Run` handles provider access and engine orchestration for both
 CLI and HTTP callers. `api.ServiceRunner` maps its output using metadata supplied
-by the server's provider configuration. Provider errors are sanitized. FRED is
-queried as of the requested New York calendar end date, even when its UTC
-end-of-day timestamp falls on the following date. Observations after that market
-date are rejected. Alpaca keeps the original UTC timestamp bounds. One constant
-rate is still used throughout.
+by the server's provider configuration. Provider errors are sanitized and may
+carry an allowlisted `provider` value (`alpaca` or `fred`). Production FRED requests
+batch historical vintages using New York calendar dates, even when UTC end-of-day
+falls on the following date. Each trading decision selects a previously available
+observation without future backfill. Legacy single-rate providers use a fixed rate
+from before the run. Alpaca keeps the original UTC timestamp bounds. Auto preflight
+calibration occurs before the historical-rate request, so unreliable fits fail
+without that request.
 
 The job manager owns a fixed worker pool and bounded waiting channel. It retains
 immutable encoded result bytes, returns copies, and evicts only finished jobs.
@@ -186,5 +217,5 @@ This protection does not replace future Monte Carlo performance/cancellation wor
 Phase 3 Tasks 1–3 are implemented and locally verified. Final tests cover a
 trading result against a direct engine run, provider failures, concurrent requests,
 expiry, shutdown, overload recovery, and a localhost HTTP round trip. Phase 4
-adds SSE replay; the frontend remains Phase 5. See the README for validation
+added SSE replay; Phase 5 added the dashboard. See the README for validation
 evidence and limits.

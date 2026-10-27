@@ -76,45 +76,14 @@ func TestRunBacktestMultiSymbol(t *testing.T) {
 		t.Fatal("expected an AAPL Buy order to be submitted")
 	}
 
-	buyFillAndSellSubmission := result.Snapshots[4]
-
-	if buyFillAndSellSubmission.FilledOrder == nil {
-		t.Fatal("expected the AAPL Buy order to fill")
+	// Entry fills at the next open, and the already armed target is touched
+	// during that candle. Both fills must survive the daily snapshot.
+	execution := result.Snapshots[4]
+	if len(execution.FilledOrders) != 2 || execution.FilledOrders[0].Action != "Buy" || execution.FilledOrders[1].Action != "Sell" {
+		t.Fatalf("missing same-day entry/exit: %+v", execution)
 	}
-
-	if buyFillAndSellSubmission.FilledOrder.Action != "Buy" {
-		t.Fatalf(
-			"filled action = %s, want Buy",
-			buyFillAndSellSubmission.FilledOrder.Action,
-		)
-	}
-
-	if buyFillAndSellSubmission.Position.Quantity <= 0 {
-		t.Fatal("expected AAPL position quantity to be positive")
-	}
-
-	if buyFillAndSellSubmission.SubmittedOrder == nil {
-		t.Fatal("expected an AAPL Sell order to be submitted")
-	}
-
-	if buyFillAndSellSubmission.SubmittedOrder.Action != "Sell" {
-		t.Fatalf(
-			"submitted action = %s, want Sell",
-			buyFillAndSellSubmission.SubmittedOrder.Action,
-		)
-	}
-
-	sellFill := result.Snapshots[6]
-
-	if sellFill.FilledOrder == nil {
-		t.Fatal("expected the AAPL Sell order to fill")
-	}
-
-	if sellFill.FilledOrder.Action != "Sell" {
-		t.Fatalf(
-			"filled action = %s, want Sell",
-			sellFill.FilledOrder.Action,
-		)
+	if execution.Position.Quantity != 0 || execution.SubmittedOrder != nil || execution.ExecutionReason != "target_touch" {
+		t.Fatal("protective target must exit on touch without a same-bar reentry")
 	}
 
 	if result.FinalPositions["AAPL"].Quantity != 0 {

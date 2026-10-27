@@ -75,11 +75,11 @@ func TestFREDMarketCalendarBoundary(t *testing.T) {
 							if got := r.URL.Query().Get("observation_end"); got != endDate {
 								t.Errorf("FRED observation_end=%s, want %s", got, endDate)
 							}
-							observationDate := endDate
+							observationDate := request.Start.In(location).AddDate(0, 0, -1).Format(time.DateOnly)
 							if futureObservation {
 								observationDate = last.AddDate(0, 0, 1).Format(time.DateOnly)
 							}
-							body = fmt.Sprintf(`{"observations":[{"date":%q,"value":"4.25"}]}`, observationDate)
+							body = fmt.Sprintf(`{"observations":[{"date":%q,"realtime_start":%q,"value":"4.25"}]}`, observationDate, observationDate)
 						default:
 							t.Fatalf("unexpected provider path %s", r.URL.Path)
 						}

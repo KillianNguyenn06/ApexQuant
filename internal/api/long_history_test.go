@@ -21,7 +21,7 @@ func TestDashboardAdvertisesExpandedDefaults(t *testing.T) {
 	})
 	w := requestHTTP(h, "GET", "/api/config", "", "")
 	var config DashboardConfig
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &config) != nil || config.MaxRangeDays != 3660 || config.MaxSnapshots != 29280 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &config) != nil || config.MaxRangeDays != 3660 || config.MaxSnapshots != MaxSymbols*3660 {
 		t.Fatalf("dashboard did not receive expanded limits: %s", w.Body.String())
 	}
 }
@@ -55,7 +55,7 @@ func TestLongHistoryAdmissionAndBoundaries(t *testing.T) {
 	if err := ValidateRequestLimits(validated, opts.MaxRangeDays, opts.MaxSnapshots); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateRequestLimits(validated, opts.MaxRangeDays, opts.MaxSnapshots-1); err == nil {
+	if err := ValidateRequestLimits(validated, opts.MaxRangeDays, MaxSymbols*opts.MaxRangeDays-1); err == nil {
 		t.Fatal("snapshot ceiling was not enforced")
 	}
 	validated.Request.EndDate = start.AddDate(0, 0, opts.MaxRangeDays).Format(time.DateOnly)
@@ -87,7 +87,7 @@ func TestMaximumLongHistoryEngineResultAndReplayFitDefaultBudgets(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Snapshots) != opts.MaxSnapshots || result.FinalAccount.Equity != 50000 {
+	if len(result.Snapshots) != MaxSymbols*opts.MaxRangeDays || result.FinalAccount.Equity != 50000 {
 		t.Fatal("long engine history was truncated or changed accounting")
 	}
 	mapped, err := NewResultResponse("long-history", request, cfg, DataInfo{Feed: "synthetic", Timeframe: "1Day", Adjustment: "raw"}, result)
@@ -111,8 +111,36 @@ func TestMaximumLongHistoryEngineResultAndReplayFitDefaultBudgets(t *testing.T) 
 	}
 	first := decodeReplay[ReplaySnapshotData](t, timeline.events[1])
 	last := decodeReplay[ReplayCompleteData](t, timeline.events[want-1])
-	if first.Snapshot.Timestamp.Format(time.DateOnly) != request.StartDate || last.TotalSnapshots != opts.MaxSnapshots || last.FinalAccount != mapped.FinalAccount {
+	if first.Snapshot.Timestamp.Format(time.DateOnly) != request.StartDate || last.TotalSnapshots != MaxSymbols*opts.MaxRangeDays || last.FinalAccount != mapped.FinalAccount {
 		t.Fatal("long replay endpoints disagree with engine result")
 	}
-	t.Logf("days=%d snapshots=%d events=%d result_bytes=%d", opts.MaxRangeDays, opts.MaxSnapshots, want, len(encoded))
+	t.Logf("days=%d snapshots=%d events=%d result_bytes=%d", opts.MaxRangeDays, len(result.Snapshots), want, len(encoded))
+}
+
+// Reject oversized minute workloads before fetching or constructing histories.
+func TestMinuteAdmissionRespectsInMemorySnapshotBudget(t *testing.T) {
+	opts := DefaultHandlerOptions()
+	r := validRequest()
+	r.Timeframe = "1Min"
+	r.StartDate = "2021-01-01"
+	r.EndDate = "2026-10-06"
+	validated, err := ValidateCreateBacktestRequest(r, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRequestLimits(validated, opts.MaxRangeDays, opts.MaxSnapshots); err == nil {
+		t.Fatal("admitted oversized minute run")
+	}
+	r.StartDate = "2026-10-05"
+	validated, err = ValidateCreateBacktestRequest(r, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRequestLimits(validated, opts.MaxRangeDays, opts.MaxSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	jobs := DefaultJobOptions()
+	if jobs.MaxResultBytes != 64<<20 || jobs.MaxStoredBytes != 256<<20 || opts.Replay.MaxBytes != 128<<20 {
+		t.Fatal("unsafe default byte budgets")
+	}
 }

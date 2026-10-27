@@ -45,6 +45,33 @@ func TestFetchBarsPagination(t *testing.T) {
 		t.Fatalf("bars=%d calls=%d err=%v", len(bars), calls, err)
 	}
 }
+
+func TestMinutePaginationAndDuplicateValidation(t *testing.T) {
+	calls := 0
+	c := testClient(func(r *http.Request) (int, string) {
+		calls++
+		if r.URL.Query().Get("timeframe") != "1Min" {
+			t.Fatal("not a minute request")
+		}
+		token := "next"
+		if calls == 2 {
+			token = ""
+		}
+		return 200, fmt.Sprintf(`{"bars":{"AAPL":[{"o":100,"h":101,"l":99,"c":100,"v":100,"vw":100,"t":"2026-10-05T13:%d:00Z"}]},"next_page_token":%q}`, 29+calls, token)
+	})
+	start := time.Date(2026, 10, 5, 13, 30, 0, 0, time.UTC)
+	bars, err := c.FetchBarsTimeframe(context.Background(), "AAPL", start, start.Add(time.Hour), "key", "secret", "1Min")
+	if err != nil || len(bars) != 2 || calls != 2 {
+		t.Fatalf("bars=%d calls=%d err=%v", len(bars), calls, err)
+	}
+	if err := ValidateBars("AAPL", bars); err == nil {
+		t.Fatal("daily validator must still reject duplicate dates")
+	}
+	bars[1].Timestamp = bars[0].Timestamp
+	if err := ValidateBarsTimeframe("AAPL", bars, "1Min"); err == nil {
+		t.Fatal("duplicate minute accepted")
+	}
+}
 func TestProviderFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

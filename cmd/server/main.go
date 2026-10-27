@@ -30,7 +30,7 @@ func main() {
 	flag.Int64Var(&jobsOptions.MaxStoredBytes, "max-stored-bytes", jobsOptions.MaxStoredBytes, "maximum retained result bytes")
 	flag.Int64Var(&httpOptions.MaxBodyBytes, "max-body-bytes", httpOptions.MaxBodyBytes, "maximum request body bytes")
 	flag.IntVar(&httpOptions.MaxRangeDays, "max-range-days", httpOptions.MaxRangeDays, "maximum requested calendar days")
-	flag.IntVar(&httpOptions.MaxSnapshots, "max-snapshots", httpOptions.MaxSnapshots, "maximum calendar-days times symbols")
+	flag.IntVar(&httpOptions.MaxSnapshots, "max-snapshots", httpOptions.MaxSnapshots, "maximum estimated snapshots (minute runs count 390 bars per calendar day)")
 	flag.IntVar(&httpOptions.MaxInFlight, "max-inflight", httpOptions.MaxInFlight, "maximum simultaneous HTTP handlers")
 	flag.IntVar(&httpOptions.RequestsPerMinute, "requests-per-minute", httpOptions.RequestsPerMinute, "shared request refill rate")
 	flag.IntVar(&httpOptions.RequestBurst, "request-burst", httpOptions.RequestBurst, "shared request burst capacity")

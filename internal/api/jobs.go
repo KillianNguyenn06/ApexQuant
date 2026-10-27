@@ -27,10 +27,11 @@ type JobOptions struct {
 
 func DefaultJobOptions() JobOptions {
 	return JobOptions{
-		Workers:        1,
-		QueueSize:      4,
-		MaxRetained:    20,
-		Retention:      3 * time.Hour,
+		Workers:     1,
+		QueueSize:   4,
+		MaxRetained: 20,
+		Retention:   3 * time.Hour,
+		// Keep in-memory retention bounded; large minute runs require explicit overrides.
 		MaxResultBytes: 64 << 20,
 		MaxStoredBytes: 256 << 20,
 	}
@@ -200,12 +201,33 @@ func (m *JobManager) execute(j *job) (data []byte, failure *APIError) {
 	if err != nil {
 		code := "internal_error"
 		message := "Backtest could not be completed."
+		provider := ""
 		var e *APIError
 		if errors.As(err, &e) {
 			switch e.Code {
 			case "provider_error":
 				code = e.Code
 				message = "Market data could not be loaded."
+				switch e.Provider {
+				case "alpaca":
+					provider = "alpaca"
+					message = "Stock price data could not be loaded from Alpaca. Check data access or try again."
+				case "fred":
+					provider = "fred"
+					message = "Historical interest rates could not be loaded from FRED. Try again or check the provider connection."
+				}
+			case "unaligned_minute_data":
+				code = e.Code
+				message = "Stocks have missing or mismatched minutes. Choose a range with aligned data; no prices or fills were fabricated."
+			case "minute_execution_disabled":
+				code = e.Code
+				message = "Minute execution is temporarily disabled. Choose daily execution."
+			case "unsupported_timeframe":
+				code = e.Code
+				message = "The configured provider does not support minute bars."
+			case "unreliable_reversion":
+				code = e.Code
+				message = "Unreliable automatic mean-reversion estimate for one or more stocks. At least 60 historical observations and a statistically supported price pull are required. Choose Manual or Off, or change stocks, dates, or VWAP window."
 			case "invalid_data":
 				code = e.Code
 				message = "Market data does not satisfy backtest requirements."
@@ -217,7 +239,7 @@ func (m *JobManager) execute(j *job) (data []byte, failure *APIError) {
 				message = "Backtest was canceled."
 			}
 		}
-		return nil, &APIError{Code: code, Message: message}
+		return nil, &APIError{Code: code, Message: message, Provider: provider}
 	}
 	data, err = json.Marshal(response)
 	if err != nil {
